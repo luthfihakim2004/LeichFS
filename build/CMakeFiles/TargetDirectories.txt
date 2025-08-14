@@ -1,3 +1,0 @@
-/home/leich/Documents/GentFS/build/CMakeFiles/gentfs.dir
-/home/leich/Documents/GentFS/build/CMakeFiles/edit_cache.dir
-/home/leich/Documents/GentFS/build/CMakeFiles/rebuild_cache.dir

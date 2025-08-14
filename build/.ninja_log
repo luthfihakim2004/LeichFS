@@ -1,8 +1,0 @@
-# ninja log v7
-2	321	1755202507076357469	CMakeFiles/gentfs.dir/src/main.cpp.o	171b49044fa7ad73
-2	275	1755202507077942570	CMakeFiles/gentfs.dir/src/fs_ops.cpp.o	f6d883e010fd9bb5
-321	361	1755202507395360931	gentfs	d825a56398d9024e
-2	274	1755206744759385183	CMakeFiles/gentfs.dir/src/fs_ops.cpp.o	f6d883e010fd9bb5
-2	275	1755206744760567967	CMakeFiles/gentfs.dir/src/util.cpp.o	37dd69fa58e343e2
-1	329	1755206744758385172	CMakeFiles/gentfs.dir/src/main.cpp.o	171b49044fa7ad73
-329	369	1755206745086388739	gentfs	73d9abe4e56fd9ac
