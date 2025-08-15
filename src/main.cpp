@@ -9,12 +9,27 @@
 #include <string>
 #include <pwd.h>
 
-static struct fuse_operations test_ops = {
-  .getattr = test_getattr,
-  .open    = test_open,
-  .read    = test_read,
-  .release = test_release,
-  .readdir = test_readdir,
+static struct fuse_operations gent_ops = {
+  .getattr   = gent_getattr,
+  .mkdir     = gent_mkdir,
+  .unlink    = gent_unlink,
+  .rmdir     = gent_rmdir,
+  .rename    = gent_rename,
+  .chmod     = gent_chmod,
+  .chown     = gent_chown,
+  .truncate  = gent_truncate,
+  .open      = gent_open,
+  .read      = gent_read,
+  .write     = gent_write,
+  .flush     = gent_flush,
+  .release   = gent_release,
+  .setxattr  = gent_setxattr,
+  .getxattr  = gent_getxattr,
+  .listxattr = gent_listxattr,
+  .removexattr = gent_removexattr,
+  .readdir   = gent_readdir,
+  .create    = gent_create,
+  .utimens   = gent_utimens,
 };
 
 int main(int argc, char* argv[]) {
@@ -54,6 +69,6 @@ int main(int argc, char* argv[]) {
 
   g_root = root;
 
-  int ret = fuse_main(static_cast<int>(args.size()), args.data(), &test_ops, nullptr);
+  int ret = fuse_main(static_cast<int>(args.size()), args.data(), &gent_ops, nullptr);
   return ret;
 }
