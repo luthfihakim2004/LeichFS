@@ -1,48 +1,24 @@
-#include "fs_ops.hpp"
-#include "util.hpp"
 #include <cstdio>
 #include <cstring>
-#include <fcntl.h>
-#include <fuse3/fuse.h>
-#include <sys/stat.h>
-#include <unistd.h>
-#include <vector>
 #include <string>
+#include <vector>
 #include <pwd.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <fuse3/fuse.h>
 
-static struct fuse_operations gent_ops = {
-  .getattr     = gent_getattr,
-  .readlink    = gent_readlink,
-  .mkdir       = gent_mkdir,
-  .unlink      = gent_unlink,
-  .rmdir       = gent_rmdir,
-  .symlink     = gent_symlink,
-  .rename      = gent_rename,
-  .chmod       = gent_chmod,
-  .chown       = gent_chown,
-  .truncate    = gent_truncate,
-  .open        = gent_open,
-  .read        = gent_read,
-  .write       = gent_write,
-  .flush       = gent_flush,
-  .release     = gent_release,
-  .fsync       = gent_fsync,
-  .setxattr    = gent_setxattr,
-  .getxattr    = gent_getxattr,
-  .listxattr   = gent_listxattr,
-  .removexattr = gent_removexattr,
-  .readdir     = gent_readdir,
-  .fsyncdir    = gent_fsyncdir,
-  .init        = gent_init,
-  .destroy     = gent_destroy,
-  .create      = gent_create,
-  .utimens     = gent_utimens,
-  //.link        = gent_link,
-};
+#include "leichfs/util.hpp"        // ctx(), FSCtx, fsutil::expand_args
+#include "leichfs/fs/ops_meta.hpp" // gent_init/gent_destroy need ctx()
+#include "fuse/dispatch.cpp"     // gent_operations()
+#include "leichfs/fs/core.hpp"
+
+// Expose g_root if you still use it elsewhere; or remove if no longer needed.
+extern std::string g_root;
 
 int main(int argc, char* argv[]) {
   if (argc < 3){
-    fprintf(stderr, "Usage: %s <mountpoint> --root=<dir>\n", argv[0]);
+    std::fprintf(stderr, "Usage: %s <mountpoint> --root=<dir>\n", argv[0]);
     return 1;
   }
 
@@ -51,7 +27,7 @@ int main(int argc, char* argv[]) {
   args.push_back(argv[0]);
 
   for (int i = 1; i < argc; ++i){
-    if (strncmp(argv[i], "--root=", 7) == 0){
+    if (std::strncmp(argv[i], "--root=", 7) == 0){
       std::string raw = argv[i] + 7;
       root = fsutil::expand_args(raw);
       if (root.size() > 1 && root.back() == '/') root.pop_back();
@@ -59,12 +35,13 @@ int main(int argc, char* argv[]) {
       std::string raw = argv[++i];
       root = fsutil::expand_args(raw);
       if (root.size() > 1 && root.back() == '/') root.pop_back();
+    } else {
+      args.push_back(argv[i]);
     }
-    else args.push_back(argv[i]);
   }
-  
+
   if (root.empty()){
-    fprintf(stderr, "Missing arguments");
+    std::fprintf(stderr, "Missing arguments\n");
     return 1;
   }
 
@@ -74,24 +51,26 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  g_root = root;
+  g_root = root; // keep if used elsewhere
 
-  auto *ctx = new FSCtx{};
-  ctx->rootfd = open(root.c_str(), O_PATH | O_DIRECTORY);
-  if (ctx->rootfd == -1){
+  auto *c = new leichfs::core::FSCtx{};
+  c->rootfd = open(root.c_str(), O_PATH | O_DIRECTORY);
+  if (c->rootfd == -1){
     std::perror("open --root failed");
-    delete ctx;
+    delete c;
     return 1;
   }
 
   args.push_back(nullptr);
 
-  int ret = fuse_main(static_cast<int>(args.size()) -1, args.data(), &gent_ops, ctx);
-  if(ret != 0){
-    if (ctx){
-      if (ctx->rootfd >= 0) close(ctx->rootfd);
-      delete ctx;
-      ctx = nullptr;
+  const fuse_operations& ops = leichfs_operations();
+  int ret = fuse_main(static_cast<int>(args.size()) - 1, args.data(), &ops, c);
+
+  if (ret != 0) {
+    if (c){
+      if (c->rootfd >= 0) close(c->rootfd);
+      delete c;
+      c = nullptr;
     }
   }
   return ret;

@@ -11,4 +11,4 @@
 
 ## To Do 
 
-- Prepare integration with cryptographic libs
+- Restructure project layout to enhance readibility

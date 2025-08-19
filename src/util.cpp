@@ -3,7 +3,7 @@
 #include <pwd.h>       // getpwuid, getpwnam
 #include <unistd.h>    // getuid
 
-namespace fsutil {
+namespace util {
 std::string expand_args(const std::string& path) {
   if (path.empty() || path[0] != '~') return path;
 
