@@ -16,6 +16,8 @@ std::string expand_args(const std::string& path);
 
 std::string rstrip_slash(std::string p);
 
+int validate_path(const char* path);
+
 namespace enc {
 
 // Master key handling (TEMPORARY)

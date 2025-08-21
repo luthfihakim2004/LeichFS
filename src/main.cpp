@@ -47,15 +47,19 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  struct stat st{};
-  if (stat(root.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+  struct stat lst{};
+  if (lstat(root.c_str(), &lst) != 0 || !S_ISDIR(lst.st_mode)) {
     std::fprintf(stderr, "Invalid --root: '%s' is not a directory\n", root.c_str());
+    return 1;
+  }
+  if (S_ISLNK(lst.st_mode)) {
+    std::fprintf(stderr, "Refusing symlink for --root: '%s'\n", root.c_str());
     return 1;
   }
 
   // Prepare user data for FUSE
   auto *ctx = new FSCtx{};
-  ctx->rootfd = open(root.c_str(), O_PATH | O_DIRECTORY);
+  ctx->rootfd = util::validate_path(root.c_str());
   if (ctx->rootfd == -1) {
     std::perror("open --root failed");
     delete ctx;

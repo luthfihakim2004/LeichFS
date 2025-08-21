@@ -1,9 +1,12 @@
 #include <cstdlib>     // std::getenv
+#include <fcntl.h>
 #include <pwd.h>       // getpwuid, getpwnam
 #include <unistd.h>    // getuid
 #include <vector>
 #include <array>
 #include <cstring>
+#include <sys/syscall.h>
+#include <linux/openat2.h>
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
 #include <openssl/crypto.h>
@@ -39,6 +42,14 @@ std::string expand_args(const std::string& path) {
 std::string rstrip_slash(std::string p) {
   if (p.size() > 1 && p.back() == '/') p.pop_back();
   return p;
+}
+
+int validate_path(const char *path){
+  struct open_how how{};
+  how.flags   = O_PATH | O_DIRECTORY | O_CLOEXEC;
+  how.resolve = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_XDEV;
+  int fd = syscall(SYS_openat2, AT_FDCWD, path, &how, sizeof(how));
+  return fd;
 }
 
 }
