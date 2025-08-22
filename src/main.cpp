@@ -30,15 +30,19 @@ int main(int argc, char* argv[]) {
   fuse_args.push_back(argv[0]);
 
   // Parse args: keep normal FUSE args; extract --root
-  for (int i = 1; i < argc; ++i) {
+  int i = 1;
+  while (i < argc) {
     if (std::strncmp(argv[i], "--root=", 7) == 0) {
       std::string raw = argv[i] + 7;
       root = rstrip_slash(util::expand_args(raw));
+      ++i;
     } else if (std::strcmp(argv[i], "--root") == 0 && i + 1 < argc) {
-      std::string raw = argv[++i];
+      std::string raw = argv[i + 1];
       root = rstrip_slash(util::expand_args(raw));
+      i += 2;
     } else {
       fuse_args.push_back(argv[i]);
+      ++i;
     }
   }
 
