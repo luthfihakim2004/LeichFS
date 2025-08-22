@@ -1,3 +1,4 @@
+#pragma once
 #include "fs/core.hpp"
 
 namespace leichfs {

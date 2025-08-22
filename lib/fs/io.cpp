@@ -189,7 +189,7 @@ int gent_write(const char *path, const char *buf, size_t size, off_t offset, str
   uint64_t cur_offset = offset;
 
   while (l > 0){
-    size_t plain = CHUNK_SIZE;
+    //size_t plain = CHUNK_SIZE;
     
     // Determine length for the chunk
     uint64_t chunk_start = cur_offset - o;
