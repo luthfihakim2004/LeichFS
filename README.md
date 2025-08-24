@@ -11,4 +11,4 @@
 
 ## To Do 
 
-- Restructure project layout to enhance readibility
+- Apply mutex mechanism to ensure consistency among threads
