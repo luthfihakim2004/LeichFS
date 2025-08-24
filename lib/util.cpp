@@ -1,6 +1,11 @@
+#include <cerrno>
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>     // std::getenv
 #include <fcntl.h>
 #include <pwd.h>       // getpwuid, getpwnam
+#include <sys/random.h>
+#include <sys/types.h>
 #include <unistd.h>    // getuid
 #include <vector>
 #include <array>
@@ -138,6 +143,20 @@ int load_master_key_from_env(std::array<uint8_t,KEY_SIZE>& out){
   }
   return 0;
 
+}
+
+int fill_rand(void *p, size_t n){
+  uint8_t *out = static_cast<uint8_t*>(p);
+  size_t off = 0;
+  while(off < n){
+    ssize_t m = getrandom(out + off, n - off, 0);
+    if (m < 0){
+      if (errno == EINTR) continue;
+      return -1;
+    }
+    off += static_cast<size_t>(m);
+  }
+  return 0;
 }
 
 

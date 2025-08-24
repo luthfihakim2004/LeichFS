@@ -1,8 +1,12 @@
 #include <cstdint>
+#include <fcntl.h>
+#include <openssl/crypto.h>
 #include <string>
 #include <vector>
 #include <cstring>
+#include <sys/random.h>
 
+#include "enc/params.hpp"
 #include "util.hpp"
 #include "enc/crypto.hpp"
 #include "enc/header.hpp"
@@ -20,6 +24,7 @@ int gent_create(const char *path, mode_t mode, struct fuse_file_info *fi){
   int oflags = (fi->flags | O_CREAT) | O_CLOEXEC | O_NOFOLLOW;
   oflags &= ~O_ACCMODE;
   oflags |= O_RDWR;         //FORCE O_RDWR
+  if (fi->flags & O_EXCL) oflags |= O_EXCL;
 
   int fd = openat(dirfd, leaf.c_str(), oflags, mode);
   int saved = errno;
@@ -35,13 +40,11 @@ int gent_create(const char *path, mode_t mode, struct fuse_file_info *fi){
 
   // Salt
   {
-    FILE *ur = std::fopen("/dev/urandom", "rb");
-    if (!ur || std::fread(h.salt, 1, SALT_SIZE, ur) != SALT_SIZE){
-      if (ur) std::fclose(ur);
-      close(fd);
+    // No file buffer
+    if (util::enc::fill_rand(h.salt, SALT_SIZE) != 0){
+        close(fd);
       return -EIO;
     }
-    std::fclose(ur);
   }
 
   h.plain_len_be = util::enc::htobe_u64(0);
@@ -59,16 +62,21 @@ int gent_create(const char *path, mode_t mode, struct fuse_file_info *fi){
   fh->plain_len = 0;
 
   std::array<uint8_t, KEY_SIZE> master{};
+  // Obtaining master key (CURRENTLY IS SET ON ENV VAR)
   if (util::enc::load_master_key_from_env(master) != 0){
+    OPENSSL_cleanse(master.data(), master.size());
     close(fd);
     delete fh;
     return -EACCES;
   }
   if (derive_file_material(master, h.salt, fh->file_key, fh->nonce_base) != 0) {
+    OPENSSL_cleanse(master.data(), master.size());
     close(fd);
     delete fh;
     return -EIO;
   }
+  // Zeroization master buffer
+  OPENSSL_cleanse(master.data(), master.size());
 
   fi->fh = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(fh));
   return 0;
@@ -79,10 +87,11 @@ int gent_open(const char *path, struct fuse_file_info *fi) {
   int rc = util::fs::walk_parent(ctx()->rootfd, path, pdir, leaf);
   if (rc != 0) return rc;
 
-  // needed flags
-  int oflags = (fi->flags & ~(O_CREAT | O_EXCL | O_TRUNC)) | O_CLOEXEC | O_NOFOLLOW;
-  oflags &= ~O_ACCMODE;
-  oflags |= O_RDWR;      // FORCE O_RDWR
+  // Respect kernel access mode for open
+  int acc = fi->flags & O_ACCMODE;
+  int oflags = (fi->flags & ~(O_CREAT|O_EXCL|O_TRUNC)) | O_CLOEXEC | O_NOFOLLOW;
+  if (acc == O_RDONLY) { oflags = (oflags & ~O_ACCMODE) | O_RDONLY; }
+  else { oflags = (oflags & ~O_ACCMODE) | O_RDWR; } // otherwise RDWR
 
   // Pre Check
   int fd = openat(pdir, leaf.empty() ? "." : leaf.c_str(), oflags);
@@ -113,15 +122,18 @@ int gent_open(const char *path, struct fuse_file_info *fi) {
 
   std::array<uint8_t, KEY_SIZE> master{};
   if (util::enc::load_master_key_from_env(master) != 0){
+    OPENSSL_cleanse(master.data(), master.size());
     close(fd);
     delete fh;
     return -EACCES;
   }
   if (derive_file_material(master, h.salt, fh->file_key, fh->nonce_base) != 0){
+    OPENSSL_cleanse(master.data(), master.size());
     close(fd);
     delete fh;
     return -EIO;
   }
+  OPENSSL_cleanse(master.data(), master.size());
 
   fi->fh = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(fh));
   return 0;
@@ -181,6 +193,10 @@ int gent_write(const char *path, const char *buf, size_t size, off_t offset, str
   (void)path;
   auto *fh = reinterpret_cast<FH*>(static_cast<uintptr_t>(fi->fh));
   if (!fh) return -EBADF;
+
+  // Honor O_APPEND 
+  // Apply per-FH mutex later
+  if (fi->flags & O_APPEND) offset = static_cast<off_t>(fh->plain_len);
 
   const uint8_t *in = reinterpret_cast<const uint8_t*>(buf);
   size_t l = size;
@@ -259,6 +275,8 @@ int gent_release(const char *path, struct fuse_file_info *fi){
 
   auto *fh = reinterpret_cast<FH*>(static_cast<uintptr_t>(fi->fh));
   if (!fh) return 0;
+  OPENSSL_cleanse(fh->file_key.data(), fh->file_key.size());
+  OPENSSL_cleanse(fh->nonce_base.data(), fh->nonce_base.size());
   close(fh->fd);
   delete fh;
 

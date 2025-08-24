@@ -7,6 +7,7 @@
 
 namespace enc {
 
+// HKDF Context
 int derive_file_material(const std::array<uint8_t, KEY_SIZE> &master_key, const uint8_t *salt, std::array<uint8_t, KEY_SIZE> &file_key, std::array<uint8_t, NONCE_SIZE> &nonce_base){
   // HKDF-Extract(master, salt) then Expand with labels
   int rc = -1;
@@ -20,7 +21,7 @@ int derive_file_material(const std::array<uint8_t, KEY_SIZE> &master_key, const 
     if (EVP_PKEY_CTX_set1_hkdf_key(pctx, master_key.data(), KEY_SIZE) <= 0) break;
 
     // Expand for file_key
-    static const char info_key[] = "gentfs-file-key";
+    static const char info_key[] = "leichfs-file-key";
     if (EVP_PKEY_CTX_add1_hkdf_info(
       pctx,
       reinterpret_cast<const unsigned char*>(info_key),
@@ -38,7 +39,7 @@ int derive_file_material(const std::array<uint8_t, KEY_SIZE> &master_key, const 
     if (EVP_PKEY_CTX_set1_hkdf_salt(pctx, salt, SALT_SIZE) <= 0) break;
     if (EVP_PKEY_CTX_set1_hkdf_key(pctx, master_key.data(), KEY_SIZE) <= 0) break;
 
-    static const char info_nonce[] = "gentfs-nonce-base";
+    static const char info_nonce[] = "leichfs-nonce-base";
     if (EVP_PKEY_CTX_add1_hkdf_info(
       pctx,
       reinterpret_cast<const unsigned char*>(info_nonce),

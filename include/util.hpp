@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <string>
 #include <cstdint>
 #include <unistd.h>
@@ -23,6 +24,9 @@ namespace enc {
 // Master key handling (TEMPORARY)
 // Returns 0 on success; master_key must be 32 bytes (binary).
 int load_master_key_from_env(std::array<uint8_t,KEY_SIZE>& out);
+
+// Ensure randomness has enough size
+int fill_rand(void* p, size_t n);
 
 // Endian helpers
 uint64_t htobe_u64(uint64_t x);
