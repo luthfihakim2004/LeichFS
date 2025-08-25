@@ -18,7 +18,7 @@ using namespace util::enc;
 
 namespace fs {
 
-int gent_getattr(const char *path, struct stat *st, struct fuse_file_info *fi) {
+int fs_getattr(const char *path, struct stat *st, struct fuse_file_info *fi) {
   (void)fi;
   memset(st, 0, sizeof(*st));
 
@@ -49,7 +49,7 @@ int gent_getattr(const char *path, struct stat *st, struct fuse_file_info *fi) {
   return 0;
 }
 
-int gent_readlink(const char *path, char *buf, size_t size){
+int fs_readlink(const char *path, char *buf, size_t size){
   int dirfd; std::string leaf;
   int rc = walk_parent(ctx()->rootfd, path, dirfd, leaf);
   if (rc != 0) return rc;
@@ -67,7 +67,7 @@ int gent_readlink(const char *path, char *buf, size_t size){
   return 0;
 }
 
-int gent_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t off, struct fuse_file_info *fi, enum fuse_readdir_flags) {
+int fs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t off, struct fuse_file_info *fi, enum fuse_readdir_flags) {
   (void)off; (void)fi;
 
   int pdirfd; std::string leaf;
@@ -128,7 +128,7 @@ int gent_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t off,
   return e ? -e : 0;
 }
 
-int gent_mkdir(const char *path, mode_t mode){
+int fs_mkdir(const char *path, mode_t mode){
   int dirfd; std::string leaf;
   int rc = walk_parent(ctx()->rootfd, path, dirfd, leaf);
   if(rc != 0) return rc;
@@ -138,7 +138,7 @@ int gent_mkdir(const char *path, mode_t mode){
   return ok == -1 ? -e : 0;
 }
 
-int gent_unlink(const char *path){
+int fs_unlink(const char *path){
   int dirfd; std::string leaf;
   int rc = walk_parent(ctx()->rootfd, path, dirfd, leaf);
   if(rc != 0) return rc;
@@ -148,7 +148,7 @@ int gent_unlink(const char *path){
   return ok == -1 ? -e : 0;
 }
 
-int gent_rmdir(const char *path){
+int fs_rmdir(const char *path){
   int dirfd; std::string leaf;
   int rc = walk_parent(ctx()->rootfd, path, dirfd, leaf);
   if(rc != 0) return rc;
@@ -158,7 +158,7 @@ int gent_rmdir(const char *path){
   return ok == -1 ? -e : 0;
 }
 
-int gent_symlink(const char *to, const char *from){
+int fs_symlink(const char *to, const char *from){
   int dirfd; std::string leaf;
   int rc = walk_parent(ctx()->rootfd, from, dirfd, leaf);
   if (rc != 0) return rc;
@@ -168,7 +168,7 @@ int gent_symlink(const char *to, const char *from){
   return ok == -1 ? -errno : 0;
 }
 
-int gent_rename(const char *from, const char *to, unsigned int flags){
+int fs_rename(const char *from, const char *to, unsigned int flags){
   int fdir; std::string fleaf;
   int tdir; std::string tleaf;
   int rc = walk_parent(ctx()->rootfd, from, fdir, fleaf); if (rc != 0) return rc;
@@ -190,7 +190,7 @@ int gent_rename(const char *from, const char *to, unsigned int flags){
 #endif
 }
 
-int gent_chmod(const char *path, mode_t mode, struct fuse_file_info *fi){
+int fs_chmod(const char *path, mode_t mode, struct fuse_file_info *fi){
   int pdir; std::string leaf;
   int rc = walk_parent(ctx()->rootfd, path, pdir, leaf);
   if (rc) return rc;
@@ -201,7 +201,7 @@ int gent_chmod(const char *path, mode_t mode, struct fuse_file_info *fi){
   return ok == -1 ? -errno : 0;
 }
 
-int gent_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_info *fi){
+int fs_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_info *fi){
   int pdir; std::string leaf;
   int rc = walk_parent(ctx()->rootfd, path, pdir, leaf);
   if (rc) return rc;
@@ -212,7 +212,7 @@ int gent_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_info *fi
   return ok == -1 ? -errno : 0;
 }
 
-int gent_utimens(const char *path, const struct timespec tv[2], struct fuse_file_info *fi){
+int fs_utimens(const char *path, const struct timespec tv[2], struct fuse_file_info *fi){
   int pdir; std::string leaf;
   int rc = walk_parent(ctx()->rootfd, path, pdir, leaf);
   if (rc) return rc;
@@ -223,7 +223,7 @@ int gent_utimens(const char *path, const struct timespec tv[2], struct fuse_file
   return ok == -1 ? -errno : 0;
 }
 
-int gent_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
+int fs_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
   FH *fh = (fi && fi->fh) ? reinterpret_cast<FH*>(static_cast<uintptr_t>(fi->fh)) : nullptr;
 
   // If we don't have an FH, open a temporary RDWR handle and derive material

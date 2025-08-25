@@ -12,44 +12,44 @@ const fuse_operations* leichfs_ops() noexcept {
   static fuse_operations op{}; // zero-initialize
 
   // lifecycle
-  op.init        = gent_init;
-  op.destroy     = gent_destroy;
+  op.init        = fs_init;
+  op.destroy     = fs_destroy;
 
   // meta
-  op.getattr     = gent_getattr;
-  op.readlink    = gent_readlink;
-  op.readdir     = gent_readdir;
+  op.getattr     = fs_getattr;
+  op.readlink    = fs_readlink;
+  op.readdir     = fs_readdir;
   op.mknod       = nullptr;       // if not supported
-  op.mkdir       = gent_mkdir;
-  op.unlink      = gent_unlink;
-  op.rmdir       = gent_rmdir;
-  op.symlink     = gent_symlink;
-  op.rename      = gent_rename;
-  //op.link        = gent_link;
-  op.chmod       = gent_chmod;
-  op.chown       = gent_chown;
-  op.truncate    = gent_truncate;
-  op.utimens     = gent_utimens;
+  op.mkdir       = fs_mkdir;
+  op.unlink      = fs_unlink;
+  op.rmdir       = fs_rmdir;
+  op.symlink     = fs_symlink;
+  op.rename      = fs_rename;
+  //op.link        = fs_link;
+  op.chmod       = fs_chmod;
+  op.chown       = fs_chown;
+  op.truncate    = fs_truncate;
+  op.utimens     = fs_utimens;
 
   // xattr
-  op.setxattr    = gent_setxattr;
-  op.getxattr    = gent_getxattr;
-  op.listxattr   = gent_listxattr;
-  op.removexattr = gent_removexattr;
+  op.setxattr    = fs_setxattr;
+  op.getxattr    = fs_getxattr;
+  op.listxattr   = fs_listxattr;
+  op.removexattr = fs_removexattr;
 
   // file I/O
-  op.create      = gent_create;
-  op.open        = gent_open;
-  op.read        = gent_read;
-  op.write       = gent_write;
-  op.flush       = gent_flush;
-  op.release     = gent_release;
-  op.fsync       = gent_fsync;
+  op.create      = fs_create;
+  op.open        = fs_open;
+  op.read        = fs_read;
+  op.write       = fs_write;
+  op.flush       = fs_flush;
+  op.release     = fs_release;
+  op.fsync       = fs_fsync;
 
   // dirs
-  //op.opendir     = gent_opendir;
-  //op.releasedir  = gent_releasedir;
-  op.fsyncdir    = gent_fsyncdir;
+  //op.opendir     = fs_opendir;
+  //op.releasedir  = fs_releasedir;
+  op.fsyncdir    = fs_fsyncdir;
 
   // leave others nullptr unless implemented
   return &op;

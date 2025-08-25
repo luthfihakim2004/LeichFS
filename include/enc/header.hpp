@@ -7,7 +7,7 @@ namespace enc {
 
 #pragma pack(push, 1)
 struct Header {
-  uint8_t  magic[8];        // "GENTOOFS"
+  uint8_t  magic[8];        // "LEICHFSX"
   uint32_t version;         // 1
   uint32_t chunk_sz;        // 65536
   uint8_t  salt[SALT_SIZE]; // per-file

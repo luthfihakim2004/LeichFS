@@ -10,7 +10,7 @@ using namespace util::enc;
 
 namespace fs {
 
-int gent_getxattr(const char *path, const char *name, char *value, size_t size){
+int fs_getxattr(const char *path, const char *name, char *value, size_t size){
   int pdir; std::string leaf;
   int rc = walk_parent(ctx()->rootfd, path, pdir, leaf);
   if (rc) return rc;
@@ -24,7 +24,7 @@ int gent_getxattr(const char *path, const char *name, char *value, size_t size){
   return n == -1 ? -errno : static_cast<int>(n);
 }
 
-int gent_listxattr(const char *path, char *list, size_t size){
+int fs_listxattr(const char *path, char *list, size_t size){
   int pdir; std::string leaf;
   int rc = walk_parent(ctx()->rootfd, path, pdir, leaf);
   if (rc) return rc;
@@ -38,7 +38,7 @@ int gent_listxattr(const char *path, char *list, size_t size){
   return n == -1 ? -errno : static_cast<int>(n);
 }
 
-int gent_setxattr(const char *path, const char *name, const char *value, size_t size, int flags){
+int fs_setxattr(const char *path, const char *name, const char *value, size_t size, int flags){
   int pdir; std::string leaf;
   int rc = walk_parent(ctx()->rootfd, path, pdir, leaf);
   if (rc) return rc;
@@ -52,7 +52,7 @@ int gent_setxattr(const char *path, const char *name, const char *value, size_t 
   return n == -1 ? -errno : static_cast<int>(n);
 }
 
-int gent_removexattr(const char *path, const char *name){
+int fs_removexattr(const char *path, const char *name){
   int pdir; std::string leaf;
   int rc = walk_parent(ctx()->rootfd, path, pdir, leaf);
   if (rc) return rc;

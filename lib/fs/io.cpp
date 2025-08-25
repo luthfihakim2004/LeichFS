@@ -15,7 +15,7 @@
 
 namespace fs {
 
-int gent_create(const char *path, mode_t mode, struct fuse_file_info *fi){
+int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi){
   int dirfd; std::string leaf;
   int rc = util::fs::walk_parent(ctx()->rootfd, path, dirfd, leaf);
   if (rc != 0) return rc;
@@ -82,7 +82,7 @@ int gent_create(const char *path, mode_t mode, struct fuse_file_info *fi){
   return 0;
 }
 
-int gent_open(const char *path, struct fuse_file_info *fi) {
+int fs_open(const char *path, struct fuse_file_info *fi) {
   int pdir; std::string leaf;
   int rc = util::fs::walk_parent(ctx()->rootfd, path, pdir, leaf);
   if (rc != 0) return rc;
@@ -139,7 +139,7 @@ int gent_open(const char *path, struct fuse_file_info *fi) {
   return 0;
 }
 
-int gent_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
+int fs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_file_info *fi) {
   (void)path;
   auto *fh = reinterpret_cast<FH*>(static_cast<uintptr_t>(fi->fh));
   if (!fh) return -EBADF;
@@ -189,7 +189,7 @@ int gent_read(const char *path, char *buf, size_t size, off_t offset, struct fus
   return static_cast<int>(done);
 }
 
-int gent_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi){
+int fs_write(const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi){
   (void)path;
   auto *fh = reinterpret_cast<FH*>(static_cast<uintptr_t>(fi->fh));
   if (!fh) return -EBADF;
@@ -265,12 +265,12 @@ int gent_write(const char *path, const char *buf, size_t size, off_t offset, str
   return static_cast<int>(size);
 }
 
-int gent_flush(const char *path, struct fuse_file_info *fi){
+int fs_flush(const char *path, struct fuse_file_info *fi){
   (void)path;
   return 0;
 }
 
-int gent_release(const char *path, struct fuse_file_info *fi){
+int fs_release(const char *path, struct fuse_file_info *fi){
   (void)path;
 
   auto *fh = reinterpret_cast<FH*>(static_cast<uintptr_t>(fi->fh));
@@ -283,7 +283,7 @@ int gent_release(const char *path, struct fuse_file_info *fi){
   return 0;
 }
 
-int gent_fsync(const char *, int, struct fuse_file_info *fi){
+int fs_fsync(const char *, int, struct fuse_file_info *fi){
   auto *fh = reinterpret_cast<FH*>(static_cast<uintptr_t>(fi->fh));
   if (!fh) return -EBADF;
   return (fsync(fh->fd) == -1) ? -errno : 0;
