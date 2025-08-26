@@ -52,7 +52,11 @@ std::string rstrip_slash(std::string p) {
 int validate_path(const char *path){
   struct open_how how{};
   how.flags   = O_PATH | O_DIRECTORY | O_CLOEXEC;
-  how.resolve = RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_NO_XDEV;
+  how.resolve = 
+    //RESOLVE_BENEATH |
+    RESOLVE_NO_SYMLINKS |
+    RESOLVE_NO_MAGICLINKS;
+    //RESOLVE_NO_XDEV;
   int fd = syscall(SYS_openat2, AT_FDCWD, path, &how, sizeof(how));
   return fd;
 }
@@ -60,6 +64,38 @@ int validate_path(const char *path){
 }
 
 namespace util::fs {
+
+ssize_t full_pread(int fd, void *buf, size_t n, off_t offset){
+  uint8_t *p = static_cast<uint8_t*>(buf);
+  
+  size_t done = 0;
+  while (done < n){
+    ssize_t r = pread(fd, p+done, n-done, offset + (off_t)done);
+    if (r < 0){
+      if (errno==EINTR) continue;
+      return -1;
+    }
+    if (r == 0) break; // EOF
+    done += (size_t)r;
+  }
+  return (ssize_t)done;
+}
+
+ssize_t full_pwrite(int fd, const void *buf, size_t n, off_t offset){
+  const uint8_t *p = static_cast<const uint8_t*>(buf);
+  
+  size_t done = 0;
+  while (done < n){
+    ssize_t w = pwrite(fd, p+done, n-done, offset + (off_t)done);
+    if (w < 0){
+      if (errno==EINTR) continue;
+      return -1;
+    }
+    if (w == 0) break; // EOF
+    done += (size_t)w;
+  }
+  return (ssize_t)done;
+}
 
 int update_plain_len(int fd, uint64_t new_plain_len){
   off_t offset = static_cast<off_t>(offsetof(Header, plain_len_be));

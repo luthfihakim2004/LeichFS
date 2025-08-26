@@ -43,10 +43,11 @@ void make_chunk_nonce(const std::array<uint8_t,NONCE_SIZE>& base,
 
 namespace fs {
 
+ssize_t full_pread(int fd, void *buf, size_t n, off_t offset);
+ssize_t full_pwrite(int fd, const void *buf, size_t n, off_t offset);
+
 constexpr uint64_t chunk_index(uint64_t offset){ return offset / CHUNK_SIZE;}
-
 constexpr size_t chunk_off(uint64_t offset){ return static_cast<size_t>(offset % CHUNK_SIZE);}
-
 constexpr uint64_t cipher_chunk_off(uint64_t i){
   return HEADER_SIZE + i * static_cast<uint64_t>(CHUNK_SIZE + TAG_SIZE);
 }

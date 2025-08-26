@@ -1,7 +1,12 @@
+#include <cerrno>
 #include <cstdint>
 #include <fcntl.h>
 #include <openssl/crypto.h>
+#include <mutex>
+#include <shared_mutex>
 #include <string>
+#include <sys/types.h>
+#include <unistd.h>
 #include <vector>
 #include <cstring>
 #include <sys/random.h>
@@ -10,7 +15,6 @@
 #include "util.hpp"
 #include "enc/crypto.hpp"
 #include "enc/header.hpp"
-#include "enc/fhandler.hpp"
 #include "fs/core.hpp"
 
 namespace fs {
@@ -60,6 +64,8 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi){
   fh->fd = fd;
   fh->chunk_sz = h.chunk_sz;
   fh->plain_len = 0;
+  fh->shared = get_shared(fd, fh->plain_len);
+  if(!fh->shared){ close(fd); delete fh; return -EIO; }
 
   std::array<uint8_t, KEY_SIZE> master{};
   // Obtaining master key (CURRENTLY IS SET ON ENV VAR)
@@ -89,9 +95,23 @@ int fs_open(const char *path, struct fuse_file_info *fi) {
 
   // Respect kernel access mode for open
   int acc = fi->flags & O_ACCMODE;
-  int oflags = (fi->flags & ~(O_CREAT|O_EXCL|O_TRUNC)) | O_CLOEXEC | O_NOFOLLOW;
-  if (acc == O_RDONLY) { oflags = (oflags & ~O_ACCMODE) | O_RDONLY; }
-  else { oflags = (oflags & ~O_ACCMODE) | O_RDWR; } // otherwise RDWR
+  int oflags = O_CLOEXEC | O_NOFOLLOW;
+  oflags |= fi->flags & (O_APPEND | O_DIRECT | O_SYNC | O_DSYNC
+#ifdef O_RSYNC
+                        | O_RSYNC
+#endif
+#ifdef O_NOATIME
+                        | O_NOATIME
+#endif
+                        );
+  switch(acc){
+    case O_RDONLY: oflags |= O_RDONLY; break;
+    case O_WRONLY: oflags |= O_WRONLY; break;
+    case O_RDWR: oflags |= O_RDWR; break;
+    default: close(pdir); return -EINVAL;
+  }
+  //if (acc == O_RDONLY) { oflags = (oflags & ~O_ACCMODE) | O_RDONLY; }
+  //else { oflags = (oflags & ~O_ACCMODE) | O_RDWR; } // otherwise RDWR
 
   // Pre Check
   int fd = openat(pdir, leaf.empty() ? "." : leaf.c_str(), oflags);
@@ -112,14 +132,25 @@ int fs_open(const char *path, struct fuse_file_info *fi) {
   Header h{};
   if (enc::read_header(fd, h) != 0){
     close(fd);
-    return -EINVAL;
+    return -EIO;
   }
 
   auto *fh = new FH{};
   fh->fd = fd;
   fh->chunk_sz = h.chunk_sz;
   fh->plain_len = util::enc::be64toh_u64(h.plain_len_be);
+  fh->shared = get_shared(fd, fh->plain_len);
+  fh->wr = (acc != O_RDONLY);
+  if(!fh->shared){ close(fd); delete fh; return -EIO; }
 
+  if (fh->wr && (fi->flags & O_TRUNC)){
+    std::lock_guard<std::shared_mutex> lk(fh->shared->mtx);
+    fh->shared->plain_len = 0;
+    fh->plain_len = 0;
+    util::fs::update_plain_len(fd, util::enc::htobe_u64(0));
+    ftruncate(fd, sizeof(Header));
+  }
+  
   std::array<uint8_t, KEY_SIZE> master{};
   if (util::enc::load_master_key_from_env(master) != 0){
     OPENSSL_cleanse(master.data(), master.size());
@@ -144,9 +175,13 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_
   auto *fh = reinterpret_cast<FH*>(static_cast<uintptr_t>(fi->fh));
   if (!fh) return -EBADF;
 
-  if (static_cast<uint64_t>(offset) >= fh->plain_len) return 0;
-  ssize_t to_read = size;
-  if (static_cast<uint64_t>(offset) + to_read > fh->plain_len) to_read = static_cast<size_t>(fh->plain_len - static_cast<uint64_t>(offset));
+  std::shared_lock<std::shared_mutex> lk(fh->shared->mtx);
+  uint64_t limit = fh->shared->plain_len;
+  fh->plain_len = limit;  // Local cache
+
+  if (static_cast<uint64_t>(offset) >= limit) return 0;
+  size_t to_read = size;
+  if (static_cast<uint64_t>(offset) + to_read > limit) to_read = static_cast<size_t>(limit - static_cast<uint64_t>(offset));
 
   uint8_t *out = reinterpret_cast<uint8_t*>(buf);
   size_t done = 0;
@@ -157,15 +192,15 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_
 
   while (done < to_read) {
     size_t plain = CHUNK_SIZE;
-    uint64_t ch_start = (i==i0) ? offset - static_cast<uint64_t>(o0) : static_cast<uint64_t>(i * CHUNK_SIZE);
-    uint64_t remain = fh->plain_len - ch_start;
+    uint64_t ch_start = (i==i0) ? static_cast<uint64_t>(offset) - static_cast<uint64_t>(o0) : static_cast<uint64_t>(i * CHUNK_SIZE);
+    uint64_t remain = limit - ch_start;
     if (remain < plain) plain = static_cast<size_t>(remain);
 
     // Read chunk
     uint64_t coffset = util::fs::cipher_chunk_off(i);
     const size_t clen = plain + TAG_SIZE;
     std::vector<uint8_t> cbuf(clen);
-    ssize_t rn = pread(fh->fd, cbuf.data(), clen, static_cast<off_t>(coffset));
+    ssize_t rn = util::fs::full_pread(fh->fd, cbuf.data(), clen, static_cast<off_t>(coffset));
     if (rn != static_cast<ssize_t>(clen)) return -EIO;
   
     // Dercypt
@@ -193,26 +228,31 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
   (void)path;
   auto *fh = reinterpret_cast<FH*>(static_cast<uintptr_t>(fi->fh));
   if (!fh) return -EBADF;
+  if (!fh->wr) return -EBADF;
 
-  // Honor O_APPEND 
-  // Apply per-FH mutex later
-  if (fi->flags & O_APPEND) offset = static_cast<off_t>(fh->plain_len);
+  std::unique_lock<std::shared_mutex> lk(fh->shared->mtx);
 
+  // Honor O_APPEND
+  off_t start_off = offset;
+  if (fi->flags & O_APPEND){
+    start_off = static_cast<off_t>(fh->shared->plain_len);
+  } 
+  
   const uint8_t *in = reinterpret_cast<const uint8_t*>(buf);
   size_t l = size;
-  uint64_t i = util::fs::chunk_index(offset);
-  size_t o = util::fs::chunk_off(offset);
-  uint64_t cur_offset = offset;
+  uint64_t i = util::fs::chunk_index(start_off);
+  size_t o = util::fs::chunk_off(start_off);
+  uint64_t cur_offset = start_off;
 
   while (l > 0){
     //size_t plain = CHUNK_SIZE;
     
     // Determine length for the chunk
     uint64_t chunk_start = cur_offset - o;
-    bool chunk_exist = (chunk_start < fh->plain_len);
+    bool chunk_exist = (chunk_start < fh->shared->plain_len);
     size_t ex_len = 0;
     if (chunk_exist){
-      uint64_t remain = fh->plain_len - chunk_start;
+      uint64_t remain = fh->shared->plain_len - chunk_start;
       ex_len = (remain >= CHUNK_SIZE) ? CHUNK_SIZE : static_cast<size_t>(remain);
     }
 
@@ -222,7 +262,7 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
       uint64_t coffset = util::fs::cipher_chunk_off(i);
       size_t clen = ex_len + TAG_SIZE;
       std::vector<uint8_t> cbuf(clen);
-      ssize_t rn = pread(fh->fd, cbuf.data(), clen, static_cast<off_t>(coffset));
+      ssize_t rn = util::fs::full_pread(fh->fd, cbuf.data(), clen, static_cast<off_t>(coffset));
       if (rn != static_cast<ssize_t>(clen)) return -EIO;
       uint8_t nonce[NONCE_SIZE];
       util::enc::make_chunk_nonce(fh->nonce_base, i, nonce);
@@ -246,7 +286,7 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
                        cbuf.data(), cbuf.data() + out_plen) != 0) return -EIO;
     
     uint64_t coffset = util::fs::cipher_chunk_off(i);
-    if (pwrite(fh->fd, cbuf.data(), cbuf.size(), static_cast<off_t>(coffset)) != static_cast<ssize_t>(cbuf.size())) return -EIO;
+    if (util::fs::full_pwrite(fh->fd, cbuf.data(), cbuf.size(), static_cast<off_t>(coffset)) != static_cast<ssize_t>(cbuf.size())) return -EIO;
 
     in += can;
     l -= can;
@@ -254,13 +294,16 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
     i++;
     o = 0;
   }
+  if(fdatasync(fh->fd) == -1) return -errno;
 
   // Update plaintext length if extended
-  uint64_t new_len = std::max<uint64_t>(fh->plain_len, static_cast<uint64_t>(offset) + size);
-  if(new_len != fh->plain_len){
+  uint64_t new_len = std::max<uint64_t>(fh->shared->plain_len, static_cast<uint64_t>(start_off) + size);
+  if(new_len != fh->shared->plain_len){
+    fh->shared->plain_len = new_len;
     fh->plain_len = new_len;
-    uint64_t be = util::enc::htobe_u64(fh->plain_len);
+    uint64_t be = util::enc::htobe_u64(new_len);
     if (util::fs::update_plain_len(fh->fd, be) != 0) return -EIO;
+    if(fdatasync(fh->fd) == -1) return -errno;
   }
   return static_cast<int>(size);
 }

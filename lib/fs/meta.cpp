@@ -10,7 +10,6 @@
 #include "fs/core.hpp"
 #include "enc/crypto.hpp"
 #include "enc/header.hpp"
-#include "enc/fhandler.hpp"
 #include "util.hpp"
 
 using namespace util::fs;

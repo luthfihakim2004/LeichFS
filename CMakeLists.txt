@@ -17,6 +17,7 @@ add_library(leichfs_lib
   lib/enc/crypto.cpp
   lib/enc/header.cpp
 
+  lib/fs/core.cpp
   lib/fs/dir.cpp
   lib/fs/io.cpp
   lib/fs/lc.cpp

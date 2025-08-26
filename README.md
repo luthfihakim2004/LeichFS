@@ -8,7 +8,8 @@
   - Metadate operations: getattr, chmod, chown, utimens
   - Links: symlink, readlink
   - Extended attributes: getxattr, setxattr, listxattr, removexattr
+- Support parallel I/O with shared locking to avoid race condition.
 
 ## To Do 
 
-- Apply mutex mechanism to ensure consistency among threads
+- Resolve nonce reuse risk with per-chunk random nonce.
