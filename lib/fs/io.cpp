@@ -1,4 +1,5 @@
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <fcntl.h>
 #include <openssl/crypto.h>
@@ -62,6 +63,7 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi){
   // FH 
   auto *fh = new FH{};
   fh->fd = fd;
+  fh->wr = true;
   fh->chunk_sz = h.chunk_sz;
   fh->plain_len = 0;
   fh->shared = get_shared(fd, fh->plain_len);
@@ -198,19 +200,22 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_
 
     // Read chunk
     uint64_t coffset = util::fs::cipher_chunk_off(i);
-    const size_t clen = plain + TAG_SIZE;
+    const size_t clen = NONCE_SIZE + plain + TAG_SIZE;
     std::vector<uint8_t> cbuf(clen);
     ssize_t rn = util::fs::full_pread(fh->fd, cbuf.data(), clen, static_cast<off_t>(coffset));
     if (rn != static_cast<ssize_t>(clen)) return -EIO;
-  
+
+    uint8_t *nonce = cbuf.data();
+    uint8_t *ct = cbuf.data() + NONCE_SIZE;
+    uint8_t *tag = ct + plain;
+
     // Dercypt
     std::vector<uint8_t> pbuf(plain);
-    uint8_t nonce[NONCE_SIZE];
-    util::enc::make_chunk_nonce(fh->nonce_base, i, nonce);
+    //util::enc::make_chunk_nonce(fh->nonce_base, i, nonce);
     if (aesgcm_decrypt(fh->file_key.data(), nonce,
-                       cbuf.data(), plain,
-                       cbuf.data() + plain, 
-                       pbuf.data()) != 0) return -EIO;
+                       ct, plain,
+                       tag, pbuf.data()
+                       ) != 0) return -EIO;
 
     // Copy requested chunk
     size_t start = (i == i0) ? o0 : 0;
@@ -245,8 +250,6 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
   uint64_t cur_offset = start_off;
 
   while (l > 0){
-    //size_t plain = CHUNK_SIZE;
-    
     // Determine length for the chunk
     uint64_t chunk_start = cur_offset - o;
     bool chunk_exist = (chunk_start < fh->shared->plain_len);
@@ -260,16 +263,20 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
     std::vector<uint8_t> pbuf(std::max(ex_len, static_cast<size_t>(CHUNK_SIZE)), 0);
     if (ex_len > 0){
       uint64_t coffset = util::fs::cipher_chunk_off(i);
-      size_t clen = ex_len + TAG_SIZE;
+
+      size_t clen = NONCE_SIZE + ex_len + TAG_SIZE;
       std::vector<uint8_t> cbuf(clen);
       ssize_t rn = util::fs::full_pread(fh->fd, cbuf.data(), clen, static_cast<off_t>(coffset));
       if (rn != static_cast<ssize_t>(clen)) return -EIO;
-      uint8_t nonce[NONCE_SIZE];
-      util::enc::make_chunk_nonce(fh->nonce_base, i, nonce);
+
+      uint8_t *nonce = cbuf.data();
+      uint8_t *ct = cbuf.data() + NONCE_SIZE;
+      uint8_t *tag = ct + ex_len;
+
       if (aesgcm_decrypt(fh->file_key.data(), nonce,
-                         cbuf.data(), ex_len,
-                         cbuf.data() + ex_len,
-                         pbuf.data()) != 0) return -EIO;
+                         ct, ex_len,
+                         tag, pbuf.data()
+                         ) != 0) return -EIO;
     }
 
     // Copy incoming bytes into the chunk
@@ -277,16 +284,22 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
     std::memcpy(pbuf.data() + o, in, can);
     size_t out_plen = std::max(ex_len, o + can);
 
-    // Encrypt n write back
-    std::vector<uint8_t> cbuf(out_plen + TAG_SIZE);
-    uint8_t nonce[NONCE_SIZE];
-    util::enc::make_chunk_nonce(fh->nonce_base, i, nonce);
+    // Generate fresh nonce 
+    const size_t clen = NONCE_SIZE + out_plen + TAG_SIZE;
+    std::vector<uint8_t>cbuf(clen);
+    if (util::enc::fill_rand(cbuf.data(), NONCE_SIZE) != 0) return -EIO;
+
+     uint8_t *nonce = cbuf.data();
+     uint8_t *ct = cbuf.data() + NONCE_SIZE;
+     uint8_t *tag = ct + out_plen;
+
+    // Encrypt
     if (aesgcm_encrypt(fh->file_key.data(), nonce,
                        pbuf.data(), out_plen,
-                       cbuf.data(), cbuf.data() + out_plen) != 0) return -EIO;
+                       ct, tag) != 0) return -EIO;
     
     uint64_t coffset = util::fs::cipher_chunk_off(i);
-    if (util::fs::full_pwrite(fh->fd, cbuf.data(), cbuf.size(), static_cast<off_t>(coffset)) != static_cast<ssize_t>(cbuf.size())) return -EIO;
+    if (util::fs::full_pwrite(fh->fd, cbuf.data(), clen, static_cast<off_t>(coffset)) != static_cast<ssize_t>(clen)) return -EIO;
 
     in += can;
     l -= can;
@@ -294,9 +307,11 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
     i++;
     o = 0;
   }
+  // Ensure to sync after writing loop for data durability
+  // Performance may overhead 
   if(fdatasync(fh->fd) == -1) return -errno;
 
-  // Update plaintext length if extended
+  // Update length if extended
   uint64_t new_len = std::max<uint64_t>(fh->shared->plain_len, static_cast<uint64_t>(start_off) + size);
   if(new_len != fh->shared->plain_len){
     fh->shared->plain_len = new_len;
