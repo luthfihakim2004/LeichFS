@@ -188,8 +188,8 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_
   uint8_t *out = reinterpret_cast<uint8_t*>(buf);
   size_t done = 0;
 
-  uint64_t i0 = util::fs::chunk_index(offset);
-  size_t o0 = util::fs::chunk_off(offset);
+  uint64_t i0 = util::fs::chunk_index(offset, fh->chunk_sz);
+  size_t o0 = util::fs::chunk_off(offset, fh->chunk_sz);
   uint64_t i = i0;
 
   while (done < to_read) {
@@ -199,7 +199,7 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_
     if (remain < plain) plain = static_cast<size_t>(remain);
 
     // Read chunk
-    uint64_t coffset = util::fs::cipher_chunk_off(i);
+    uint64_t coffset = util::fs::cipher_chunk_off(i, fh->chunk_sz);
     const size_t clen = NONCE_SIZE + plain + TAG_SIZE;
     std::vector<uint8_t> cbuf(clen);
     ssize_t rn = util::fs::full_pread(fh->fd, cbuf.data(), clen, static_cast<off_t>(coffset));
@@ -245,8 +245,8 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
   
   const uint8_t *in = reinterpret_cast<const uint8_t*>(buf);
   size_t l = size;
-  uint64_t i = util::fs::chunk_index(start_off);
-  size_t o = util::fs::chunk_off(start_off);
+  uint64_t i = util::fs::chunk_index(start_off, fh->chunk_sz);
+  size_t o = util::fs::chunk_off(start_off, fh->chunk_sz);
   uint64_t cur_offset = start_off;
 
   while (l > 0){
@@ -262,7 +262,7 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
     // Build chunk buffer
     std::vector<uint8_t> pbuf(std::max(ex_len, static_cast<size_t>(CHUNK_SIZE)), 0);
     if (ex_len > 0){
-      uint64_t coffset = util::fs::cipher_chunk_off(i);
+      uint64_t coffset = util::fs::cipher_chunk_off(i, fh->chunk_sz);
 
       size_t clen = NONCE_SIZE + ex_len + TAG_SIZE;
       std::vector<uint8_t> cbuf(clen);
@@ -298,7 +298,7 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
                        pbuf.data(), out_plen,
                        ct, tag) != 0) return -EIO;
     
-    uint64_t coffset = util::fs::cipher_chunk_off(i);
+    uint64_t coffset = util::fs::cipher_chunk_off(i, fh->chunk_sz);
     if (util::fs::full_pwrite(fh->fd, cbuf.data(), clen, static_cast<off_t>(coffset)) != static_cast<ssize_t>(clen)) return -EIO;
 
     in += can;

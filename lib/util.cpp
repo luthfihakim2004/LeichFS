@@ -153,6 +153,14 @@ int leaf_nofollow(int dirfd, const char *name, int oflags){
   return openat(dirfd, (name && *name) ? name : ".", oflags | O_CLOEXEC | O_NOFOLLOW);
 }
 
+uint64_t chunk_index(uint64_t offset, size_t sz){ return offset / sz;}
+size_t chunk_off(uint64_t offset, size_t sz){ return static_cast<size_t>(offset % sz);}
+uint64_t cipher_chunk_off(uint64_t i, size_t sz){
+  return HEADER_SIZE + i * static_cast<uint64_t>(sz + TAG_SIZE + CHUNK_STRIDE);
+}
+uint64_t cipher_tail_off(uint64_t full, size_t plain, size_t sz){
+  return HEADER_SIZE + full * static_cast<uint64_t>(sz + TAG_SIZE) + static_cast<uint64_t>(plain + TAG_SIZE);
+}
 
 }
 

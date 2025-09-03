@@ -46,14 +46,10 @@ namespace fs {
 ssize_t full_pread(int fd, void *buf, size_t n, off_t offset);
 ssize_t full_pwrite(int fd, const void *buf, size_t n, off_t offset);
 
-constexpr uint64_t chunk_index(uint64_t offset){ return offset / CHUNK_SIZE;}
-constexpr size_t chunk_off(uint64_t offset){ return static_cast<size_t>(offset % CHUNK_SIZE);}
-constexpr uint64_t cipher_chunk_off(uint64_t i){
-  return HEADER_SIZE + i * static_cast<uint64_t>(CHUNK_SIZE + TAG_SIZE + CHUNK_STRIDE);
-}
-constexpr uint64_t cipher_tail_off(uint64_t full, size_t plain){
-  return HEADER_SIZE + full * static_cast<uint64_t>(CHUNK_SIZE + TAG_SIZE) + static_cast<uint64_t>(plain + TAG_SIZE);
-}
+uint64_t chunk_index(uint64_t offset, size_t sz);
+size_t chunk_off(uint64_t offset, size_t sz);
+uint64_t cipher_chunk_off(uint64_t i, size_t sz);
+uint64_t cipher_tail_off(uint64_t full, size_t plain, size_t sz);
 
 int update_plain_len(int fd, uint64_t new_plain_len);
 

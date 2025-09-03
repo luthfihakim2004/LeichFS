@@ -275,7 +275,7 @@ int fs_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
 
       // Read+decrypt the current last chunk
       std::vector<uint8_t> pbuf(ex_len, 0);
-      const uint64_t coffset = cipher_chunk_off(last_full);
+      const uint64_t coffset = cipher_chunk_off(last_full, fh->chunk_sz);
       std::vector<uint8_t> cbuf(ex_len + TAG_SIZE);
       if (pread(fh->fd, cbuf.data(), cbuf.size(), static_cast<off_t>(coffset)) !=
           static_cast<ssize_t>(cbuf.size())) {
@@ -309,14 +309,14 @@ int fs_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
       }
 
       // Physically cut ciphertext after the new tail
-      const uint64_t cut = cipher_tail_off(last_full, tail_len);
+      const uint64_t cut = cipher_tail_off(last_full, tail_len, fh->chunk_sz);
       if (ftruncate(fh->fd, static_cast<off_t>(cut)) == -1) {
         if (temp_open) { close(fh->fd); delete fh; }
         return -errno;
       }
     } else {
       // Exact chunk boundary
-      const uint64_t cut = cipher_chunk_off(last_full);
+      const uint64_t cut = cipher_chunk_off(last_full, fh->chunk_sz);
       if (ftruncate(fh->fd, static_cast<off_t>(cut)) == -1) {
         if (temp_open) { close(fh->fd); delete fh; }
         return -errno;
@@ -327,8 +327,8 @@ int fs_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
     // -------- GROW --------
     uint64_t pos = old_len;
     while (pos < new_len) {
-      const uint64_t i = chunk_index(pos);
-      const size_t   o = chunk_off(pos);
+      const uint64_t i = chunk_index(pos, fh->chunk_sz);
+      const size_t   o = chunk_off(pos, fh->chunk_sz);
       const size_t   w = static_cast<size_t>(
                            std::min<uint64_t>(CHUNK_SIZE - o, new_len - pos));
 
@@ -342,7 +342,7 @@ int fs_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
 
       // Build a full chunk buffer, decrypt existing prefix if present
       std::vector<uint8_t> pbuf(std::max(ex_len, static_cast<size_t>(CHUNK_SIZE)), 0);
-      const uint64_t coffset = cipher_chunk_off(i);
+      const uint64_t coffset = cipher_chunk_off(i, fh->chunk_sz);
       if (ex_len > 0) {
         std::vector<uint8_t> cbuf(ex_len + TAG_SIZE);
         if (pread(fh->fd, cbuf.data(), cbuf.size(), static_cast<off_t>(coffset)) !=

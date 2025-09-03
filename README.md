@@ -12,4 +12,4 @@
 
 ## To Do 
 
-- Resolve nonce reuse risk with per-chunk random nonce.
+- Add AAD to prevent replay attack in the chunks.
