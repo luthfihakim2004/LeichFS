@@ -34,8 +34,11 @@ struct FH {
   int      fd{-1};                             // ciphertext file fd
   uint32_t chunk_sz{enc::CHUNK_SIZE};
   uint64_t plain_len{0};                       // bytes
+  
   std::array<uint8_t,enc::KEY_SIZE>   file_key{};   // derived via HKDF
   std::array<uint8_t,enc::NONCE_SIZE> nonce_base{}; // derived via HKDF
+  std::array<uint8_t, enc::AAD_PREFIX_LEN> aad_prefix{};
+
   std::shared_ptr<SharedResState> shared;
   bool wr = true;
 };

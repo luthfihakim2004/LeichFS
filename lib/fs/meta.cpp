@@ -6,7 +6,9 @@
 #include <dirent.h>
 #include <limits.h>
 #include <unistd.h>
+#include <openssl/crypto.h>
 
+#include "enc/params.hpp"
 #include "fs/core.hpp"
 #include "enc/crypto.hpp"
 #include "enc/header.hpp"
@@ -225,8 +227,9 @@ int fs_utimens(const char *path, const struct timespec tv[2], struct fuse_file_i
 int fs_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
   FH *fh = (fi && fi->fh) ? reinterpret_cast<FH*>(static_cast<uintptr_t>(fi->fh)) : nullptr;
 
-  // If we don't have an FH, open a temporary RDWR handle and derive material
+  // If FH is missing, open a temporary RDWR handle and derive material (+AAD prefix)
   bool temp_open = false;
+  Header h{};
   if (!fh) {
     int pdir; std::string leaf;
     int rc = walk_parent(ctx()->rootfd, path, pdir, leaf);
@@ -237,7 +240,6 @@ int fs_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
     close(pdir);
     if (fd == -1) return -saved;
 
-    Header h{};
     if (read_header(fd, h) != 0) { close(fd); return -EINVAL; }
 
     auto *tfh = new FH{};
@@ -246,15 +248,23 @@ int fs_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
     tfh->plain_len = be64toh_u64(h.plain_len_be);
 
     std::array<uint8_t, KEY_SIZE> master{};
-    if (load_master_key_from_env(master) != 0) { close(fd); delete tfh; return -EACCES; }
-    if (derive_file_material(master, h.salt, tfh->file_key, tfh->nonce_base) != 0) {
-      close(fd); delete tfh; return -EIO;
-    }
+    if (load_master_key_from_env(master) != 0) { OPENSSL_cleanse(master.data(), master.size()); close(fd); delete tfh; return -EACCES; }
+    if (derive_file_material(master, h.salt, tfh->file_key, tfh->nonce_base) != 0) { OPENSSL_cleanse(master.data(), master.size()); close(fd); delete tfh; return -EIO; }
+    OPENSSL_cleanse(master.data(), master.size());
+
+    // Build AAD prefix: magic[8] || be32(version) || be32(chunk_sz) || salt[SALT_SIZE]
+    std::memcpy(tfh->aad_prefix.data(), h.magic, 8);
+    uint32_t v_be  = util::enc::htobe_u32(h.version);
+    uint32_t sz_be = util::enc::htobe_u32(h.chunk_sz);
+    std::memcpy(tfh->aad_prefix.data() + 8,  &v_be,  4);
+    std::memcpy(tfh->aad_prefix.data() + 12, &sz_be, 4);
+    std::memcpy(tfh->aad_prefix.data() + 16, h.salt, enc::SALT_SIZE);
 
     fh = tfh;
     temp_open = true;
   }
 
+  const uint32_t csz = fh->chunk_sz;
   const uint64_t old_len = fh->plain_len;
   const uint64_t new_len = static_cast<uint64_t>(size);
   if (new_len == old_len) {
@@ -264,59 +274,87 @@ int fs_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
 
   if (new_len < old_len) {
     // -------- SHRINK --------
-    const uint64_t last_full = new_len / CHUNK_SIZE;
-    const size_t   tail_len  = static_cast<size_t>(new_len % CHUNK_SIZE);
+    const uint64_t last_full = new_len / csz;
+    const size_t   tail_len  = static_cast<size_t>(new_len % csz);
 
     if (tail_len > 0) {
-      const uint64_t ch_start = last_full * CHUNK_SIZE;
-      const size_t ex_len = (old_len - ch_start >= CHUNK_SIZE)
-                            ? CHUNK_SIZE
-                            : static_cast<size_t>(old_len - ch_start);
+      // Keep the partial tail of chunk 'last_full'
+      const uint64_t ch_start = last_full * csz;
 
-      // Read+decrypt the current last chunk
-      std::vector<uint8_t> pbuf(ex_len, 0);
-      const uint64_t coffset = cipher_chunk_off(last_full, fh->chunk_sz);
-      std::vector<uint8_t> cbuf(ex_len + TAG_SIZE);
-      if (pread(fh->fd, cbuf.data(), cbuf.size(), static_cast<off_t>(coffset)) !=
-          static_cast<ssize_t>(cbuf.size())) {
-        if (temp_open) { close(fh->fd); delete fh; }
-        return -EIO;
-      }
-      uint8_t nonce[NONCE_SIZE];
-      make_chunk_nonce(fh->nonce_base, last_full, nonce);
-      if (aesgcm_decrypt(fh->file_key.data(), nonce,
-                         cbuf.data(), ex_len,
-                         cbuf.data() + ex_len,
-                         pbuf.data()) != 0) {
-        if (temp_open) { close(fh->fd); delete fh; }
-        return -EIO;
+      size_t ex_len = 0;
+      if (ch_start < old_len) {
+        const uint64_t rem = old_len - ch_start;
+        ex_len = (rem >= csz) ? csz : static_cast<size_t>(rem);
       }
 
-      // Re-encrypt only the truncated tail
+      // Read + decrypt existing last chunk (ex_len > 0 is expected)
+      std::vector<uint8_t> pbuf(ex_len ? ex_len : tail_len, 0);
+      const uint64_t coffset = util::fs::cipher_chunk_off(last_full, csz);
+
+      if (ex_len > 0) {
+        const size_t clen = NONCE_SIZE + ex_len + TAG_SIZE;
+        std::vector<uint8_t> cbuf(clen);
+        ssize_t rn = util::fs::full_pread(fh->fd, cbuf.data(), clen, static_cast<off_t>(coffset));
+        if (rn != static_cast<ssize_t>(clen)) { if (temp_open) { close(fh->fd); delete fh; } return -EIO; }
+
+        uint8_t *nonce = cbuf.data();
+        uint8_t *ct    = cbuf.data() + NONCE_SIZE;
+        uint8_t *tag   = ct + ex_len;
+
+        // AAD = prefix || be64(last_full)
+        uint8_t aad[enc::AAD_PREFIX_LEN + 8];
+        std::memcpy(aad, fh->aad_prefix.data(), enc::AAD_PREFIX_LEN);
+        uint64_t idx_be = util::enc::htobe_u64(last_full);
+        std::memcpy(aad + enc::AAD_PREFIX_LEN, &idx_be, 8);
+
+        if (aesgcm_decrypt(fh->file_key.data(), nonce, ct, ex_len,
+                           aad, enc::AAD_PREFIX_LEN + 8,
+                           tag, pbuf.data()) != 0) {
+          if (temp_open) { close(fh->fd); delete fh; }
+          return -EBADMSG;
+        }
+      }
+
+      // Keep only 'tail_len' bytes
       pbuf.resize(tail_len);
-      std::vector<uint8_t> out(tail_len + TAG_SIZE);
-      make_chunk_nonce(fh->nonce_base, last_full, nonce);
-      if (aesgcm_encrypt(fh->file_key.data(), nonce,
-                         pbuf.data(), tail_len,
-                         out.data(), out.data() + tail_len) != 0) {
+
+      // Re-encrypt tail with a FRESH nonce and write back
+      const size_t out_len = tail_len;
+      const size_t wlen = NONCE_SIZE + out_len + TAG_SIZE;
+      std::vector<uint8_t> out(wlen);
+      if (util::enc::fill_rand(out.data(), NONCE_SIZE) != 0) { if (temp_open) { close(fh->fd); delete fh; } return -EIO; }
+      uint8_t *nonce2 = out.data();
+      uint8_t *ct2    = out.data() + NONCE_SIZE;
+      uint8_t *tag2   = ct2 + out_len;
+
+      // AAD again for same index
+      uint8_t aad2[enc::AAD_PREFIX_LEN + 8];
+      std::memcpy(aad2, fh->aad_prefix.data(), enc::AAD_PREFIX_LEN);
+      uint64_t idx2_be = util::enc::htobe_u64(last_full);
+      std::memcpy(aad2 + enc::AAD_PREFIX_LEN, &idx2_be, 8);
+
+      if (aesgcm_encrypt(fh->file_key.data(), nonce2,
+                         pbuf.data(), out_len,
+                         aad2, enc::AAD_PREFIX_LEN + 8,
+                         ct2, tag2) != 0) {
         if (temp_open) { close(fh->fd); delete fh; }
         return -EIO;
       }
-      if (pwrite(fh->fd, out.data(), out.size(), static_cast<off_t>(coffset)) !=
-          static_cast<ssize_t>(out.size())) {
+      if (util::fs::full_pwrite(fh->fd, out.data(), wlen, static_cast<off_t>(coffset)) != static_cast<ssize_t>(wlen)) {
         if (temp_open) { close(fh->fd); delete fh; }
         return -EIO;
       }
 
       // Physically cut ciphertext after the new tail
-      const uint64_t cut = cipher_tail_off(last_full, tail_len, fh->chunk_sz);
+      const uint64_t cut = util::fs::cipher_tail_off(last_full, tail_len, csz);
       if (ftruncate(fh->fd, static_cast<off_t>(cut)) == -1) {
         if (temp_open) { close(fh->fd); delete fh; }
         return -errno;
       }
+
     } else {
       // Exact chunk boundary
-      const uint64_t cut = cipher_chunk_off(last_full, fh->chunk_sz);
+      const uint64_t cut = util::fs::cipher_chunk_off(last_full, csz);
       if (ftruncate(fh->fd, static_cast<off_t>(cut)) == -1) {
         if (temp_open) { close(fh->fd); delete fh; }
         return -errno;
@@ -327,37 +365,42 @@ int fs_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
     // -------- GROW --------
     uint64_t pos = old_len;
     while (pos < new_len) {
-      const uint64_t i = chunk_index(pos, fh->chunk_sz);
-      const size_t   o = chunk_off(pos, fh->chunk_sz);
-      const size_t   w = static_cast<size_t>(
-                           std::min<uint64_t>(CHUNK_SIZE - o, new_len - pos));
+      const uint64_t i = util::fs::chunk_index(pos, csz);
+      const size_t   o = util::fs::chunk_off(pos, csz);
+      const size_t   w = static_cast<size_t>(std::min<uint64_t>(csz - o, new_len - pos));
 
       // Determine how many bytes currently exist in this chunk
       size_t ex_len = 0;
       const uint64_t ch_start = pos - o; // start of this chunk in plaintext space
       if (ch_start < old_len) {
         const uint64_t rem = old_len - ch_start;
-        ex_len = (rem >= CHUNK_SIZE) ? CHUNK_SIZE : static_cast<size_t>(rem);
+        ex_len = (rem >= csz) ? csz : static_cast<size_t>(rem);
       }
 
       // Build a full chunk buffer, decrypt existing prefix if present
-      std::vector<uint8_t> pbuf(std::max(ex_len, static_cast<size_t>(CHUNK_SIZE)), 0);
-      const uint64_t coffset = cipher_chunk_off(i, fh->chunk_sz);
+      std::vector<uint8_t> pbuf(std::max(ex_len, static_cast<size_t>(csz)), 0);
+      const uint64_t coffset = util::fs::cipher_chunk_off(i, csz);
       if (ex_len > 0) {
-        std::vector<uint8_t> cbuf(ex_len + TAG_SIZE);
-        if (pread(fh->fd, cbuf.data(), cbuf.size(), static_cast<off_t>(coffset)) !=
-            static_cast<ssize_t>(cbuf.size())) {
+        const size_t clen = NONCE_SIZE + ex_len + TAG_SIZE;
+        std::vector<uint8_t> cbuf(clen);
+        ssize_t rn = util::fs::full_pread(fh->fd, cbuf.data(), clen, static_cast<off_t>(coffset));
+        if (rn != static_cast<ssize_t>(clen)) { if (temp_open) { close(fh->fd); delete fh; } return -EIO; }
+
+        uint8_t *nonce = cbuf.data();
+        uint8_t *ct    = cbuf.data() + NONCE_SIZE;
+        uint8_t *tag   = ct + ex_len;
+
+        // AAD for index i
+        uint8_t aad[enc::AAD_PREFIX_LEN + 8];
+        std::memcpy(aad, fh->aad_prefix.data(), enc::AAD_PREFIX_LEN);
+        uint64_t idx_be = util::enc::htobe_u64(i);
+        std::memcpy(aad + enc::AAD_PREFIX_LEN, &idx_be, 8);
+
+        if (aesgcm_decrypt(fh->file_key.data(), nonce, ct, ex_len,
+                           aad, enc::AAD_PREFIX_LEN + 8,
+                           tag, pbuf.data()) != 0) {
           if (temp_open) { close(fh->fd); delete fh; }
-          return -EIO;
-        }
-        uint8_t nonce[NONCE_SIZE];
-        make_chunk_nonce(fh->nonce_base, i, nonce);
-        if (aesgcm_decrypt(fh->file_key.data(), nonce,
-                           cbuf.data(), ex_len,
-                           cbuf.data() + ex_len,
-                           pbuf.data()) != 0) {
-          if (temp_open) { close(fh->fd); delete fh; }
-          return -EIO;
+          return -EBADMSG;
         }
       }
 
@@ -365,18 +408,28 @@ int fs_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
       std::memset(pbuf.data() + o, 0, w);
       const size_t out_len = std::max(ex_len, o + w);
 
-      // Encrypt and write back the (possibly partial) chunk
-      std::vector<uint8_t> cbuf(out_len + TAG_SIZE);
-      uint8_t nonce[NONCE_SIZE];
-      make_chunk_nonce(fh->nonce_base, i, nonce);
-      if (aesgcm_encrypt(fh->file_key.data(), nonce,
+      // Encrypt and write back the (possibly partial) chunk with a fresh nonce
+      const size_t wlen = NONCE_SIZE + out_len + TAG_SIZE;
+      std::vector<uint8_t> cbuf(wlen);
+      if (util::enc::fill_rand(cbuf.data(), NONCE_SIZE) != 0) { if (temp_open) { close(fh->fd); delete fh; } return -EIO; }
+      uint8_t *nonce2 = cbuf.data();
+      uint8_t *ct2    = cbuf.data() + NONCE_SIZE;
+      uint8_t *tag2   = ct2 + out_len;
+
+      // AAD for index i
+      uint8_t aad2[enc::AAD_PREFIX_LEN + 8];
+      std::memcpy(aad2, fh->aad_prefix.data(), enc::AAD_PREFIX_LEN);
+      uint64_t idx2_be = util::enc::htobe_u64(i);
+      std::memcpy(aad2 + enc::AAD_PREFIX_LEN, &idx2_be, 8);
+
+      if (aesgcm_encrypt(fh->file_key.data(), nonce2,
                          pbuf.data(), out_len,
-                         cbuf.data(), cbuf.data() + out_len) != 0) {
+                         aad2, enc::AAD_PREFIX_LEN + 8,
+                         ct2, tag2) != 0) {
         if (temp_open) { close(fh->fd); delete fh; }
         return -EIO;
       }
-      if (pwrite(fh->fd, cbuf.data(), cbuf.size(), static_cast<off_t>(coffset)) !=
-          static_cast<ssize_t>(cbuf.size())) {
+      if (util::fs::full_pwrite(fh->fd, cbuf.data(), wlen, static_cast<off_t>(coffset)) != static_cast<ssize_t>(wlen)) {
         if (temp_open) { close(fh->fd); delete fh; }
         return -EIO;
       }
@@ -387,7 +440,7 @@ int fs_truncate(const char *path, off_t size, struct fuse_file_info *fi) {
 
   // -------- Commit new logical length in header (8-byte write) --------
   fh->plain_len = new_len;
-  const uint64_t be = htobe_u64(fh->plain_len);
+  const uint64_t be = fh->plain_len;
   if (update_plain_len(fh->fd, be) != 0) {
     if (temp_open) { close(fh->fd); delete fh; }
     return -EIO;

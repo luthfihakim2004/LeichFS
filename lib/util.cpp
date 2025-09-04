@@ -1,12 +1,12 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>     // std::getenv
+#include <cstdlib>
 #include <fcntl.h>
-#include <pwd.h>       // getpwuid, getpwnam
+#include <pwd.h>
 #include <sys/random.h>
 #include <sys/types.h>
-#include <unistd.h>    // getuid
+#include <unistd.h>
 #include <vector>
 #include <array>
 #include <cstring>
@@ -97,10 +97,66 @@ ssize_t full_pwrite(int fd, const void *buf, size_t n, off_t offset){
   return (ssize_t)done;
 }
 
-int update_plain_len(int fd, uint64_t new_plain_len){
-  off_t offset = static_cast<off_t>(offsetof(Header, plain_len_be));
-  ssize_t n = pwrite(fd, &new_plain_len, sizeof(new_plain_len), offset);
-  return (n == static_cast<ssize_t>(sizeof(new_plain_len))) ? 0 : -1;
+int update_plain_len(int fd, uint64_t new_plain_len_host) {
+  // Sanity: make sure we're writing the correct field
+  static_assert(HEADER_SIZE == 64, "Header size unexpected");
+  static_assert(offsetof(Header, plain_len_be) == 56, "plain_len offset mismatch");
+
+ // // Identify the target file (dev, ino) for debugging
+ // struct stat st{};
+ // if (fstat(fd, &st) == -1) {
+ //   int se = errno;
+ //   fprintf(stderr, "[HDRLEN] fstat failed errno=%d (%m)\n", se);
+ //   return -1;
+ // }
+ // const off_t off = static_cast<off_t>(offsetof(Header, plain_len_be));
+
+ // uint64_t be = util::enc::htobe_u64(new_plain_len_host);
+ // ssize_t n = pwrite(fd, &be, sizeof(be), off);
+ // if (n != (ssize_t)sizeof(be)) {
+ //   int se = errno;
+ //   fprintf(stderr, "[HDRLEN] pwrite failed n=%zd errno=%d (%m) dev=%ju ino=%ju off=%lld\n",
+ //           n, se, (uintmax_t)st.st_dev, (uintmax_t)st.st_ino, (long long)off);
+ //   return -1;
+ // }
+
+ // // Force it out; if this fails we want to see it.
+ // if (fsync(fd) == -1) {
+ //   int se = errno;
+ //   fprintf(stderr, "[HDRLEN] fsync failed errno=%d (%m) dev=%ju ino=%ju\n",
+ //           se, (uintmax_t)st.st_dev, (uintmax_t)st.st_ino);
+ //   return -1;
+ // }
+
+ // // Read back to confirm the exact bytes on this fd
+ // uint64_t rb = 0;
+ // ssize_t rn = pread(fd, &rb, sizeof(rb), off);
+ // if (rn != (ssize_t)sizeof(rb)) {
+ //   int se = errno;
+ //   fprintf(stderr, "[HDRLEN] pread failed rn=%zd errno=%d (%m) dev=%ju ino=%ju off=%lld\n",
+ //           rn, se, (uintmax_t)st.st_dev, (uintmax_t)st.st_ino, (long long)off);
+ //   return -1;
+ // }
+
+ // fprintf(stderr,
+ //   "[HDRLEN] dev=%ju ino=%ju write host=%llu be=%016llx read_be=%016llx @%lld\n",
+ //   (uintmax_t)st.st_dev, (uintmax_t)st.st_ino,
+ //   (unsigned long long)new_plain_len_host,
+ //   (unsigned long long)be, (unsigned long long)rb, (long long)off);
+
+  Header h{};
+  if (read_header(fd, h) != 0) { /* log & return */ }
+  h.plain_len_be = util::enc::htobe_u64(new_plain_len_host);
+
+  // write whole header from offset 0
+  ssize_t wn = pwrite(fd, &h, sizeof(h), 0);
+  if (wn != (ssize_t)sizeof(h)) { fprintf(stderr,"[HDRLEN] full header write failed (%m)\n"); return -1; }
+  fsync(fd);
+
+  // read back just the len again
+  uint64_t rb=0; pread(fd, &rb, sizeof(rb), 56);
+  fprintf(stderr,"[HDRLEN] after full header write read_be=%016llx\n", (unsigned long long)rb);
+  return 0;
 }
 
 std::vector<std::string> split_components(const char *path){
@@ -156,10 +212,11 @@ int leaf_nofollow(int dirfd, const char *name, int oflags){
 uint64_t chunk_index(uint64_t offset, size_t sz){ return offset / sz;}
 size_t chunk_off(uint64_t offset, size_t sz){ return static_cast<size_t>(offset % sz);}
 uint64_t cipher_chunk_off(uint64_t i, size_t sz){
-  return HEADER_SIZE + i * static_cast<uint64_t>(sz + TAG_SIZE + CHUNK_STRIDE);
+  return HEADER_SIZE + i * static_cast<uint64_t>(NONCE_SIZE + sz + TAG_SIZE);
 }
 uint64_t cipher_tail_off(uint64_t full, size_t plain, size_t sz){
-  return HEADER_SIZE + full * static_cast<uint64_t>(sz + TAG_SIZE) + static_cast<uint64_t>(plain + TAG_SIZE);
+  //return HEADER_SIZE + full * static_cast<uint64_t>(sz + TAG_SIZE) + static_cast<uint64_t>(plain + TAG_SIZE);
+  return cipher_chunk_off(full, sz) + (NONCE_SIZE + plain + TAG_SIZE);
 }
 
 }
@@ -212,21 +269,19 @@ uint64_t htobe_u64(uint64_t x){
 #endif
 
 }
+uint32_t htobe_u32(uint32_t x){
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+  return __builtin_bswap32(x);
+#else
+  return x;
+#endif
+
+}
+
 
 uint64_t be64toh_u64(uint64_t x){
 return htobe_u64(x);
 }
-
-void make_chunk_nonce(const std::array<uint8_t,NONCE_SIZE>& base,
-                      uint64_t idx,
-                      uint8_t out[NONCE_SIZE]){
-  // Copy base, XOR the last 8 bytes with big-endian idx
-  std::memcpy(out, base.data(), NONCE_SIZE);
-  uint64_t be = htobe_u64(idx);
-  for (int i=0;i<8;i++) out[NONCE_SIZE-8+i] ^= ((uint8_t*)&be)[i];
-
-}
-
 
 }
 

@@ -83,6 +83,24 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi){
     delete fh;
     return -EIO;
   }
+
+  // --- Build AAD prefix: magic[8] || be32(version) || be32(chunk_sz) || salt[SALT_SIZE]
+  {
+    // magic
+    std::memcpy(fh->aad_prefix.data(), h.magic, 8);
+
+    // version (BE u32)
+    uint32_t v_be = util::enc::htobe_u32(h.version);
+    std::memcpy(fh->aad_prefix.data() + 8, &v_be, 4);
+
+    // chunk_sz (BE u32)
+    uint32_t sz_be = util::enc::htobe_u32(h.chunk_sz);
+    std::memcpy(fh->aad_prefix.data() + 12, &sz_be, 4);
+
+    // salt
+    std::memcpy(fh->aad_prefix.data() + 16, h.salt, enc::SALT_SIZE);
+  }
+
   // Zeroization master buffer
   OPENSSL_cleanse(master.data(), master.size());
 
@@ -112,8 +130,8 @@ int fs_open(const char *path, struct fuse_file_info *fi) {
     case O_RDWR: oflags |= O_RDWR; break;
     default: close(pdir); return -EINVAL;
   }
-  //if (acc == O_RDONLY) { oflags = (oflags & ~O_ACCMODE) | O_RDONLY; }
-  //else { oflags = (oflags & ~O_ACCMODE) | O_RDWR; } // otherwise RDWR
+  if (acc == O_RDONLY) { oflags = (oflags & ~O_ACCMODE) | O_RDONLY; }
+  else { oflags = (oflags & ~O_ACCMODE) | O_RDWR; } // otherwise RDWR
 
   // Pre Check
   int fd = openat(pdir, leaf.empty() ? "." : leaf.c_str(), oflags);
@@ -129,6 +147,12 @@ int fs_open(const char *path, struct fuse_file_info *fi) {
     close(fd);
     return -EISDIR;
   }
+  int of = fcntl(fd, F_GETFL);
+fprintf(stderr, "[OPEN] fd=%d oflags=0x%x acc=%s%s%s\n", fd, of,
+  ((of & O_ACCMODE)==O_RDONLY? "RDONLY" :
+   (of & O_ACCMODE)==O_WRONLY? "WRONLY" : "RDWR"),
+  (of & O_APPEND) ? " +APPEND" : "",
+  (of & O_DIRECT) ? " +DIRECT" : "");
 
   // Validate header
   Header h{};
@@ -144,14 +168,22 @@ int fs_open(const char *path, struct fuse_file_info *fi) {
   fh->shared = get_shared(fd, fh->plain_len);
   fh->wr = (acc != O_RDONLY);
   if(!fh->shared){ close(fd); delete fh; return -EIO; }
-
+  {
+    std::lock_guard<std::shared_mutex> lk(fh->shared->mtx);
+    if (fh->shared->plain_len < fh->plain_len) {
+      fh->shared->plain_len = fh->plain_len;
+    }
+  }
   if (fh->wr && (fi->flags & O_TRUNC)){
     std::lock_guard<std::shared_mutex> lk(fh->shared->mtx);
     fh->shared->plain_len = 0;
     fh->plain_len = 0;
-    util::fs::update_plain_len(fd, util::enc::htobe_u64(0));
+    util::fs::update_plain_len(fd, 0);
     ftruncate(fd, sizeof(Header));
   }
+
+  fprintf(stderr, "[OPEN] header plain_len(be->host)=%llu\n",
+        (unsigned long long)fh->plain_len);
   
   std::array<uint8_t, KEY_SIZE> master{};
   if (util::enc::load_master_key_from_env(master) != 0){
@@ -168,6 +200,19 @@ int fs_open(const char *path, struct fuse_file_info *fi) {
   }
   OPENSSL_cleanse(master.data(), master.size());
 
+  // --- Build AAD prefix
+  {
+    std::memcpy(fh->aad_prefix.data(), h.magic, 8);
+
+    uint32_t v_be = util::enc::htobe_u32(h.version);
+    std::memcpy(fh->aad_prefix.data() + 8, &v_be, 4);
+
+    uint32_t sz_be = util::enc::htobe_u32(h.chunk_sz);
+    std::memcpy(fh->aad_prefix.data() + 12, &sz_be, 4);
+
+    std::memcpy(fh->aad_prefix.data() + 16, h.salt, enc::SALT_SIZE);
+  }
+
   fi->fh = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(fh));
   return 0;
 }
@@ -179,7 +224,6 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_
 
   std::shared_lock<std::shared_mutex> lk(fh->shared->mtx);
   uint64_t limit = fh->shared->plain_len;
-  fh->plain_len = limit;  // Local cache
 
   if (static_cast<uint64_t>(offset) >= limit) return 0;
   size_t to_read = size;
@@ -188,18 +232,24 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_
   uint8_t *out = reinterpret_cast<uint8_t*>(buf);
   size_t done = 0;
 
-  uint64_t i0 = util::fs::chunk_index(offset, fh->chunk_sz);
-  size_t o0 = util::fs::chunk_off(offset, fh->chunk_sz);
+  const uint32_t csz = fh->chunk_sz;
+  uint64_t i0 = util::fs::chunk_index(offset, csz);
+  size_t o0 = util::fs::chunk_off(offset, csz);
   uint64_t i = i0;
 
   while (done < to_read) {
-    size_t plain = CHUNK_SIZE;
-    uint64_t ch_start = (i==i0) ? static_cast<uint64_t>(offset) - static_cast<uint64_t>(o0) : static_cast<uint64_t>(i * CHUNK_SIZE);
+    size_t plain = csz;
+    uint64_t ch_start = (i==i0) ? static_cast<uint64_t>(offset) - static_cast<uint64_t>(o0) : static_cast<uint64_t>(i * csz);
     uint64_t remain = limit - ch_start;
     if (remain < plain) plain = static_cast<size_t>(remain);
 
     // Read chunk
-    uint64_t coffset = util::fs::cipher_chunk_off(i, fh->chunk_sz);
+    uint64_t coffset = util::fs::cipher_chunk_off(i, csz);
+if (coffset < enc::HEADER_SIZE) {
+  fprintf(stderr, "[BUG] chunk write would clobber header: coffset=%llu i=%llu\n",
+          (unsigned long long)coffset, (unsigned long long)i);
+  return -EIO;
+}
     const size_t clen = NONCE_SIZE + plain + TAG_SIZE;
     std::vector<uint8_t> cbuf(clen);
     ssize_t rn = util::fs::full_pread(fh->fd, cbuf.data(), clen, static_cast<off_t>(coffset));
@@ -211,11 +261,18 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_
 
     // Dercypt
     std::vector<uint8_t> pbuf(plain);
-    //util::enc::make_chunk_nonce(fh->nonce_base, i, nonce);
+
+    // Build AAD
+    uint8_t aad[enc::AAD_PREFIX_LEN + 8];
+    std::memcpy(aad, fh->aad_prefix.data(), enc::AAD_PREFIX_LEN);
+    uint64_t i_be = util::enc::htobe_u64(i);
+    std::memcpy(aad + enc::AAD_PREFIX_LEN, &i_be, 8);
+
     if (aesgcm_decrypt(fh->file_key.data(), nonce,
                        ct, plain,
+                       aad, enc::AAD_PREFIX_LEN + 8,
                        tag, pbuf.data()
-                       ) != 0) return -EIO;
+                       ) != 0) return -EBADMSG;
 
     // Copy requested chunk
     size_t start = (i == i0) ? o0 : 0;
@@ -242,11 +299,16 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
   if (fi->flags & O_APPEND){
     start_off = static_cast<off_t>(fh->shared->plain_len);
   } 
+  fprintf(stderr, "[WRITE] start_off=%lld size=%zu shared=%llu header=%llu\n",
+        (long long)start_off, size,
+        (unsigned long long)fh->shared->plain_len,
+        (unsigned long long)fh->plain_len);
   
   const uint8_t *in = reinterpret_cast<const uint8_t*>(buf);
+  const uint32_t csz = fh->chunk_sz;
   size_t l = size;
-  uint64_t i = util::fs::chunk_index(start_off, fh->chunk_sz);
-  size_t o = util::fs::chunk_off(start_off, fh->chunk_sz);
+  uint64_t i = util::fs::chunk_index(start_off, csz);
+  size_t o = util::fs::chunk_off(start_off, csz);
   uint64_t cur_offset = start_off;
 
   while (l > 0){
@@ -256,14 +318,18 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
     size_t ex_len = 0;
     if (chunk_exist){
       uint64_t remain = fh->shared->plain_len - chunk_start;
-      ex_len = (remain >= CHUNK_SIZE) ? CHUNK_SIZE : static_cast<size_t>(remain);
+      ex_len = (remain >= csz) ? csz : static_cast<size_t>(remain);
     }
 
     // Build chunk buffer
-    std::vector<uint8_t> pbuf(std::max(ex_len, static_cast<size_t>(CHUNK_SIZE)), 0);
+    std::vector<uint8_t> pbuf(std::max(ex_len, static_cast<size_t>(csz)), 0);
     if (ex_len > 0){
-      uint64_t coffset = util::fs::cipher_chunk_off(i, fh->chunk_sz);
-
+      uint64_t coffset = util::fs::cipher_chunk_off(i, csz);
+if (coffset < enc::HEADER_SIZE) {
+  fprintf(stderr, "[BUG] chunk write would clobber header: coffset=%llu i=%llu\n",
+          (unsigned long long)coffset, (unsigned long long)i);
+  return -EIO;
+}
       size_t clen = NONCE_SIZE + ex_len + TAG_SIZE;
       std::vector<uint8_t> cbuf(clen);
       ssize_t rn = util::fs::full_pread(fh->fd, cbuf.data(), clen, static_cast<off_t>(coffset));
@@ -273,14 +339,21 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
       uint8_t *ct = cbuf.data() + NONCE_SIZE;
       uint8_t *tag = ct + ex_len;
 
+      // Build AAD
+      uint8_t aad[enc::AAD_PREFIX_LEN + 8];
+      std::memcpy(aad, fh->aad_prefix.data(), enc::AAD_PREFIX_LEN);
+      uint64_t i_be = util::enc::htobe_u64(i);
+      std::memcpy(aad + enc::AAD_PREFIX_LEN, &i_be, 8);
+      
       if (aesgcm_decrypt(fh->file_key.data(), nonce,
                          ct, ex_len,
+                         aad, enc::AAD_PREFIX_LEN + 8,
                          tag, pbuf.data()
-                         ) != 0) return -EIO;
+                         ) != 0) return -EBADMSG;
     }
 
     // Copy incoming bytes into the chunk
-    size_t can = std::min(l, CHUNK_SIZE - o);
+    size_t can = std::min(l, csz - o);
     std::memcpy(pbuf.data() + o, in, can);
     size_t out_plen = std::max(ex_len, o + can);
 
@@ -294,11 +367,16 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
      uint8_t *tag = ct + out_plen;
 
     // Encrypt
+    uint8_t aad[enc::AAD_PREFIX_LEN + 8];
+    std::memcpy(aad, fh->aad_prefix.data(), enc::AAD_PREFIX_LEN);
+    uint64_t i_be = util::enc::htobe_u64(i);
+    std::memcpy(aad + enc::AAD_PREFIX_LEN, &i_be, 8);
     if (aesgcm_encrypt(fh->file_key.data(), nonce,
                        pbuf.data(), out_plen,
+                       aad, enc::AAD_PREFIX_LEN + 8,
                        ct, tag) != 0) return -EIO;
     
-    uint64_t coffset = util::fs::cipher_chunk_off(i, fh->chunk_sz);
+    uint64_t coffset = util::fs::cipher_chunk_off(i, csz);
     if (util::fs::full_pwrite(fh->fd, cbuf.data(), clen, static_cast<off_t>(coffset)) != static_cast<ssize_t>(clen)) return -EIO;
 
     in += can;
@@ -311,15 +389,25 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
   // Performance may overhead 
   if(fdatasync(fh->fd) == -1) return -errno;
 
-  // Update length if extended
-  uint64_t new_len = std::max<uint64_t>(fh->shared->plain_len, static_cast<uint64_t>(start_off) + size);
-  if(new_len != fh->shared->plain_len){
-    fh->shared->plain_len = new_len;
-    fh->plain_len = new_len;
-    uint64_t be = util::enc::htobe_u64(new_len);
-    if (util::fs::update_plain_len(fh->fd, be) != 0) return -EIO;
-    if(fdatasync(fh->fd) == -1) return -errno;
+  // end position of this write
+  const uint64_t end_pos = static_cast<uint64_t>(start_off) + size;
+
+  // Update shared view first
+  if (end_pos > fh->shared->plain_len) {
+    fh->shared->plain_len = end_pos;
   }
+
+  // Persist header **iff** we extended beyond what the header says we have.
+  // (fh->plain_len holds the header value read at fs_open)
+  if (end_pos > fh->plain_len) {
+    if (util::fs::update_plain_len(fh->fd, end_pos) != 0) return -EIO;
+    if (fdatasync(fh->fd) == -1) return -errno;
+    fh->plain_len = end_pos;  // keep FH’s cached header length in sync
+  }
+  fprintf(stderr, "[WRITE-END] end_pos=%llu shared=%llu header(after?)=%llu\n",
+        (unsigned long long)end_pos,
+        (unsigned long long)fh->shared->plain_len,
+        (unsigned long long)fh->plain_len);
   return static_cast<int>(size);
 }
 

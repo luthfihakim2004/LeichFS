@@ -30,13 +30,8 @@ int fill_rand(void* p, size_t n);
 
 // Endian helpers
 uint64_t htobe_u64(uint64_t x);
+uint32_t htobe_u32(uint32_t x);
 uint64_t be64toh_u64(uint64_t x);
-
-
-// Nonce for chunk i = nonce_base with last 8 bytes XOR chunk_index (big-endian)
-void make_chunk_nonce(const std::array<uint8_t,NONCE_SIZE>& base,
-                      uint64_t chunk_idx,
-                      uint8_t out[NONCE_SIZE]);
 
 }
 
@@ -51,7 +46,7 @@ size_t chunk_off(uint64_t offset, size_t sz);
 uint64_t cipher_chunk_off(uint64_t i, size_t sz);
 uint64_t cipher_tail_off(uint64_t full, size_t plain, size_t sz);
 
-int update_plain_len(int fd, uint64_t new_plain_len);
+int update_plain_len(int fd, uint64_t new_plain_len_host);
 
 int walk_parent(int rootfd, const char *path, int &out_dirfd, std::string &leaf);
 

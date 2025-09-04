@@ -18,11 +18,13 @@ int derive_file_material(const std::array<uint8_t,KEY_SIZE>& master_key,
 int aesgcm_encrypt(const uint8_t key[KEY_SIZE],
                    const uint8_t nonce[NONCE_SIZE],
                    const uint8_t* pt, size_t pt_len,
+                   const uint8_t* aad, size_t aad_len,
                    uint8_t* ct, uint8_t tag[TAG_SIZE]);
 
 int aesgcm_decrypt(const uint8_t key[KEY_SIZE],
                    const uint8_t nonce[NONCE_SIZE],
                    const uint8_t* ct, size_t ct_len,
+                   const uint8_t* aad, size_t aad_len,
                    const uint8_t tag[TAG_SIZE],
                    uint8_t* pt);
 
