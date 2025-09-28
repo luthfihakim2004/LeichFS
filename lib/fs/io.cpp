@@ -64,6 +64,7 @@ int fs_create(const char *path, mode_t mode, struct fuse_file_info *fi){
   auto *fh = new FH{};
   fh->fd = fd;
   fh->wr = true;
+  fh->oflags = fi->flags;
   fh->chunk_sz = h.chunk_sz;
   fh->plain_len = 0;
   fh->shared = get_shared(fd, fh->plain_len);
@@ -116,7 +117,7 @@ int fs_open(const char *path, struct fuse_file_info *fi) {
   // Respect kernel access mode for open
   int acc = fi->flags & O_ACCMODE;
   int oflags = O_CLOEXEC | O_NOFOLLOW;
-  oflags |= fi->flags & (O_APPEND | O_DIRECT | O_SYNC | O_DSYNC
+  oflags |= fi->flags & (O_DIRECT | O_SYNC | O_DSYNC
 #ifdef O_RSYNC
                         | O_RSYNC
 #endif
@@ -130,8 +131,6 @@ int fs_open(const char *path, struct fuse_file_info *fi) {
     case O_RDWR: oflags |= O_RDWR; break;
     default: close(pdir); return -EINVAL;
   }
-  if (acc == O_RDONLY) { oflags = (oflags & ~O_ACCMODE) | O_RDONLY; }
-  else { oflags = (oflags & ~O_ACCMODE) | O_RDWR; } // otherwise RDWR
 
   // Pre Check
   int fd = openat(pdir, leaf.empty() ? "." : leaf.c_str(), oflags);
@@ -296,7 +295,7 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
 
   // Honor O_APPEND
   off_t start_off = offset;
-  if (fi->flags & O_APPEND){
+  if (fh->oflags & O_APPEND){
     start_off = static_cast<off_t>(fh->shared->plain_len);
   } 
   fprintf(stderr, "[WRITE] start_off=%lld size=%zu shared=%llu header=%llu\n",

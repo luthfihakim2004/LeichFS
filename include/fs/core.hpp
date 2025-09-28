@@ -32,6 +32,8 @@ struct SharedResState{
 // File handler
 struct FH {
   int      fd{-1};                             // ciphertext file fd
+  int oflags;
+
   uint32_t chunk_sz{enc::CHUNK_SIZE};
   uint64_t plain_len{0};                       // bytes
   

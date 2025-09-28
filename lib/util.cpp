@@ -98,64 +98,42 @@ ssize_t full_pwrite(int fd, const void *buf, size_t n, off_t offset){
 }
 
 int update_plain_len(int fd, uint64_t new_plain_len_host) {
-  // Sanity: make sure we're writing the correct field
   static_assert(HEADER_SIZE == 64, "Header size unexpected");
   static_assert(offsetof(Header, plain_len_be) == 56, "plain_len offset mismatch");
 
- // // Identify the target file (dev, ino) for debugging
- // struct stat st{};
- // if (fstat(fd, &st) == -1) {
- //   int se = errno;
- //   fprintf(stderr, "[HDRLEN] fstat failed errno=%d (%m)\n", se);
- //   return -1;
- // }
- // const off_t off = static_cast<off_t>(offsetof(Header, plain_len_be));
+  const off_t off = static_cast<off_t>(offsetof(Header, plain_len_be));
+  const uint64_t be = util::enc::htobe_u64(new_plain_len_host);
 
- // uint64_t be = util::enc::htobe_u64(new_plain_len_host);
- // ssize_t n = pwrite(fd, &be, sizeof(be), off);
- // if (n != (ssize_t)sizeof(be)) {
- //   int se = errno;
- //   fprintf(stderr, "[HDRLEN] pwrite failed n=%zd errno=%d (%m) dev=%ju ino=%ju off=%lld\n",
- //           n, se, (uintmax_t)st.st_dev, (uintmax_t)st.st_ino, (long long)off);
- //   return -1;
- // }
+  // Write exactly 8 bytes at offset 56
+  ssize_t n = pwrite(fd, &be, sizeof(be), off);
+  if (n != (ssize_t)sizeof(be)) {
+    int se = errno;
+    fprintf(stderr, "[HDRLEN] pwrite failed n=%zd errno=%d (%m) off=%lld\n",
+            n, se, (long long)off);
+    return -1;
+  }
 
- // // Force it out; if this fails we want to see it.
- // if (fsync(fd) == -1) {
- //   int se = errno;
- //   fprintf(stderr, "[HDRLEN] fsync failed errno=%d (%m) dev=%ju ino=%ju\n",
- //           se, (uintmax_t)st.st_dev, (uintmax_t)st.st_ino);
- //   return -1;
- // }
+  // Persist metadata; fdatasync is sufficient for regular files
+  if (fdatasync(fd) == -1) {
+    int se = errno;
+    fprintf(stderr, "[HDRLEN] fdatasync failed errno=%d (%m)\n", se);
+    return -1;
+  }
 
- // // Read back to confirm the exact bytes on this fd
- // uint64_t rb = 0;
- // ssize_t rn = pread(fd, &rb, sizeof(rb), off);
- // if (rn != (ssize_t)sizeof(rb)) {
- //   int se = errno;
- //   fprintf(stderr, "[HDRLEN] pread failed rn=%zd errno=%d (%m) dev=%ju ino=%ju off=%lld\n",
- //           rn, se, (uintmax_t)st.st_dev, (uintmax_t)st.st_ino, (long long)off);
- //   return -1;
- // }
+  // Verify by reading back and converting to host
+  uint64_t rb_be = 0;
+  n = pread(fd, &rb_be, sizeof(rb_be), off);
+  if (n != (ssize_t)sizeof(rb_be)) {
+    int se = errno;
+    fprintf(stderr, "[HDRLEN] pread verify failed n=%zd errno=%d (%m) off=%lld\n",
+            n, se, (long long)off);
+    return -1;
+  }
+  uint64_t rb_host = util::enc::be64toh_u64(rb_be);
+  fprintf(stderr, "[HDRLEN] wrote host=%llu read_back host=%llu\n",
+          (unsigned long long)new_plain_len_host,
+          (unsigned long long)rb_host);
 
- // fprintf(stderr,
- //   "[HDRLEN] dev=%ju ino=%ju write host=%llu be=%016llx read_be=%016llx @%lld\n",
- //   (uintmax_t)st.st_dev, (uintmax_t)st.st_ino,
- //   (unsigned long long)new_plain_len_host,
- //   (unsigned long long)be, (unsigned long long)rb, (long long)off);
-
-  Header h{};
-  if (read_header(fd, h) != 0) { /* log & return */ }
-  h.plain_len_be = util::enc::htobe_u64(new_plain_len_host);
-
-  // write whole header from offset 0
-  ssize_t wn = pwrite(fd, &h, sizeof(h), 0);
-  if (wn != (ssize_t)sizeof(h)) { fprintf(stderr,"[HDRLEN] full header write failed (%m)\n"); return -1; }
-  fsync(fd);
-
-  // read back just the len again
-  uint64_t rb=0; pread(fd, &rb, sizeof(rb), 56);
-  fprintf(stderr,"[HDRLEN] after full header write read_be=%016llx\n", (unsigned long long)rb);
   return 0;
 }
 
