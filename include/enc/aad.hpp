@@ -1,0 +1,51 @@
+#include <array>
+#include <cstdint>
+#include <cstring>
+
+#include "enc/params.hpp"
+#include "util.hpp"
+
+// NOTE: AAD layout uses mixed endianness:
+// - version, chunk_size: little-endian (on-disk compatibility)
+// - chunk_index: big-endian (canonical counter encoding)
+void build_aad(uint8_t *out, const std::array<uint8_t, enc::AAD_PREFIX_LEN> &prefix, uint64_t idx){
+  std::memcpy(out, prefix.data(), enc::AAD_PREFIX_LEN);
+
+  for (int i = 0; i < 8; ++i){
+    out[enc::AAD_PREFIX_LEN + i] = static_cast<uint8_t>(idx >> (56 - 8*i));
+  }
+
+  void test_build_aad_vector() {
+    std::array<uint8_t, enc::AAD_PREFIX_LEN> prefix = {
+      // magic: "LEICHFSX"
+      0x4c, 0x45, 0x49, 0x43, 0x48, 0x46, 0x53, 0x58,
+      // version: 1
+      0x01, 0x00, 0x00, 0x00,
+      // chunk size: 65536
+      0x00, 0x00, 0x01, 0x00,
+      // salt
+      0x00, 0x01, 0x02, 0x03,
+      0x04, 0x05, 0x06, 0x07,
+      0x08, 0x09, 0x0a, 0x0b,
+      0x0c, 0x0d, 0x0e, 0x0f
+    };
+
+  constexpr uint64_t idx = 0x1122334455667788;
+
+  std::array<uint8_t, enc::AAD_PREFIX_LEN + 8> aad{};
+  build_aad(aad.data(), prefix, idx);
+
+  const std::array<uint8_t, enc::AAD_PREFIX_LEN + 8> expected = {
+    0x4c,0x45,0x49,0x43,0x48,0x46,0x53,0x58,
+    0x01,0x00,0x00,0x00,
+    0x00,0x00,0x01,0x00,
+    0x00,0x01,0x02,0x03,
+    0x04,0x05,0x06,0x07,
+    0x08,0x09,0x0a,0x0b,
+    0x0c,0x0d,0x0e,0x0f,
+    0x11,0x22,0x33,0x44,
+    0x55,0x66,0x77,0x88
+  };
+
+  assert(aad == expected);
+}

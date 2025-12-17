@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <fcntl.h>
+#include <limits>
 #include <openssl/crypto.h>
 #include <mutex>
 #include <shared_mutex>
@@ -147,11 +148,6 @@ int fs_open(const char *path, struct fuse_file_info *fi) {
     return -EISDIR;
   }
   int of = fcntl(fd, F_GETFL);
-fprintf(stderr, "[OPEN] fd=%d oflags=0x%x acc=%s%s%s\n", fd, of,
-  ((of & O_ACCMODE)==O_RDONLY? "RDONLY" :
-   (of & O_ACCMODE)==O_WRONLY? "WRONLY" : "RDWR"),
-  (of & O_APPEND) ? " +APPEND" : "",
-  (of & O_DIRECT) ? " +DIRECT" : "");
 
   // Validate header
   Header h{};
@@ -180,9 +176,6 @@ fprintf(stderr, "[OPEN] fd=%d oflags=0x%x acc=%s%s%s\n", fd, of,
     util::fs::update_plain_len(fd, 0);
     ftruncate(fd, sizeof(Header));
   }
-
-  fprintf(stderr, "[OPEN] header plain_len(be->host)=%llu\n",
-        (unsigned long long)fh->plain_len);
   
   std::array<uint8_t, KEY_SIZE> master{};
   if (util::enc::load_master_key_from_env(master) != 0){
@@ -244,11 +237,6 @@ int fs_read(const char *path, char *buf, size_t size, off_t offset, struct fuse_
 
     // Read chunk
     uint64_t coffset = util::fs::cipher_chunk_off(i, csz);
-if (coffset < enc::HEADER_SIZE) {
-  fprintf(stderr, "[BUG] chunk write would clobber header: coffset=%llu i=%llu\n",
-          (unsigned long long)coffset, (unsigned long long)i);
-  return -EIO;
-}
     const size_t clen = NONCE_SIZE + plain + TAG_SIZE;
     std::vector<uint8_t> cbuf(clen);
     ssize_t rn = util::fs::full_pread(fh->fd, cbuf.data(), clen, static_cast<off_t>(coffset));
@@ -297,11 +285,10 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
   off_t start_off = offset;
   if (fh->oflags & O_APPEND){
     start_off = static_cast<off_t>(fh->shared->plain_len);
-  } 
-  fprintf(stderr, "[WRITE] start_off=%lld size=%zu shared=%llu header=%llu\n",
-        (long long)start_off, size,
-        (unsigned long long)fh->shared->plain_len,
-        (unsigned long long)fh->plain_len);
+  }
+  if (size > std::numeric_limits<uint64_t>::max() - static_cast<uint64_t>(start_off)){
+    return -EFBIG;
+  }
   
   const uint8_t *in = reinterpret_cast<const uint8_t*>(buf);
   const uint32_t csz = fh->chunk_sz;
@@ -324,11 +311,6 @@ int fs_write(const char *path, const char *buf, size_t size, off_t offset, struc
     std::vector<uint8_t> pbuf(std::max(ex_len, static_cast<size_t>(csz)), 0);
     if (ex_len > 0){
       uint64_t coffset = util::fs::cipher_chunk_off(i, csz);
-if (coffset < enc::HEADER_SIZE) {
-  fprintf(stderr, "[BUG] chunk write would clobber header: coffset=%llu i=%llu\n",
-          (unsigned long long)coffset, (unsigned long long)i);
-  return -EIO;
-}
       size_t clen = NONCE_SIZE + ex_len + TAG_SIZE;
       std::vector<uint8_t> cbuf(clen);
       ssize_t rn = util::fs::full_pread(fh->fd, cbuf.data(), clen, static_cast<off_t>(coffset));
@@ -385,10 +367,9 @@ if (coffset < enc::HEADER_SIZE) {
     o = 0;
   }
   // Ensure to sync after writing loop for data durability
-  // Performance may overhead 
-  if(fdatasync(fh->fd) == -1) return -errno;
+  // Performance may overhead (Moved after header update) 
+  //if(fdatasync(fh->fd) == -1) return -errno;
 
-  // end position of this write
   const uint64_t end_pos = static_cast<uint64_t>(start_off) + size;
 
   // Update shared view first
@@ -403,10 +384,6 @@ if (coffset < enc::HEADER_SIZE) {
     if (fdatasync(fh->fd) == -1) return -errno;
     fh->plain_len = end_pos;  // keep FH’s cached header length in sync
   }
-  fprintf(stderr, "[WRITE-END] end_pos=%llu shared=%llu header(after?)=%llu\n",
-        (unsigned long long)end_pos,
-        (unsigned long long)fh->shared->plain_len,
-        (unsigned long long)fh->plain_len);
   return static_cast<int>(size);
 }
 

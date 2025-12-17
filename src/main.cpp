@@ -6,11 +6,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#include "util.hpp"     // util::expand_args, etc.
-#include "fs/core.hpp"  // leichfs::core::FSCtx, leichfs_operations()
+#include "util.hpp"     
+#include "fs/core.hpp"  
 #include "leichfs/dispatch.hpp"
-
-// If your destroy() frees the context (recommended), we won't double-free here.
 
 static std::string rstrip_slash(std::string s) {
   if (s.size() > 1 && s.back() == '/') s.pop_back();
@@ -29,6 +27,11 @@ int main(int argc, char* argv[]) {
   fuse_args.reserve(static_cast<size_t>(argc) + 1);
   fuse_args.push_back(argv[0]);
 
+  if (root.empty()) {
+    std::fprintf(stderr, "Missing --root\n");
+    return 1;
+  }
+  
   // Parse args: keep normal FUSE args; extract --root
   int i = 1;
   while (i < argc) {
@@ -46,11 +49,6 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  if (root.empty()) {
-    std::fprintf(stderr, "Missing --root\n");
-    return 1;
-  }
-
   struct stat lst{};
   if (lstat(root.c_str(), &lst) != 0 || !S_ISDIR(lst.st_mode)) {
     std::fprintf(stderr, "Invalid --root: '%s' is not a directory\n", root.c_str());
@@ -61,7 +59,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  // Prepare user data for FUSE
+  // Prepare FUSE Context 
   auto *ctx = new FSCtx{};
   ctx->rootfd = util::validate_path(root.c_str());
   if (ctx->rootfd == -1) {
@@ -69,20 +67,12 @@ int main(int argc, char* argv[]) {
     delete ctx;
     return 1;
   }
-  //ctx->root_path = root; // if your FSCtx tracks the path; otherwise remove
 
   fuse_args.push_back(nullptr); // fuse_main expects argv-style NUL-terminated list
 
   // Dispatch to lib's ops table
   const fuse_operations* ops = leichfs::leichfs_ops();
   int ret = fuse_main(static_cast<int>(fuse_args.size()) - 1, fuse_args.data(), ops, ctx);
-
-  // If your destroy() already freed ctx, do nothing here.
-  // If not, uncomment:
-  // if (ctx) {
-  //   if (ctx->rootfd >= 0) close(ctx->rootfd);
-  //   delete ctx;
-  // }
 
   return ret;
 }

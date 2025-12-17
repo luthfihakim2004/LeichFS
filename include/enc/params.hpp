@@ -11,4 +11,8 @@ inline constexpr size_t   KEY_SIZE        = 32;        // AES-256
 inline constexpr size_t   NONCE_SIZE      = 12;        // GCM standard
 inline constexpr size_t   CHUNK_STRIDE    = NONCE_SIZE + CHUNK_SIZE + TAG_SIZE;   // IV | Chunk | Tag
 inline constexpr size_t   AAD_PREFIX_LEN  = 8 + 4 + 4 + SALT_SIZE;                // magic | version | chunk | salt 
+
+static_assert(NONCE_SIZE == 12, "IV size error");
+static_assert(AAD_PREFIX_LEN == 32, "Unexpected AAD prefix size");
+
 } // namespace enc
