@@ -38,7 +38,7 @@ Each chunk of ciphertext is authenticated with a 40-byte AAD, which costructed a
 AAD[40] = magic[8] || be32(version)[4] || be32(chunk_sz)[4] || salt[16] || be64(chunk_idx)[8]
 ```
 
-This construction provide more security propertise:
+This construction provide more security properties:
 - File binding: magic and salt bind the ciphertext to avoid chunk transplation
 - Chunk position binding: chunk_idx prevents chunk reordering within a file
 
