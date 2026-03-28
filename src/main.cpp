@@ -1,78 +1,144 @@
 #include <cstdio>
 #include <cstring>
-#include <string>
-#include <vector>
-#include <sys/stat.h>
 #include <fcntl.h>
+#include <string>
+#include <sys/stat.h>
 #include <unistd.h>
+#include <vector>
 
-#include "util.hpp"     
-#include "fs/core.hpp"  
+#include "fs/core.hpp"
 #include "leichfs/dispatch.hpp"
+#include "leichfs/init.hpp"
+#include "util.hpp"
 
-static std::string rstrip_slash(std::string s) {
-  if (s.size() > 1 && s.back() == '/') s.pop_back();
-  return s;
+static void usage(const char* prog) {
+  std::fprintf(stderr,
+    "Usage:\n"
+    "  %s --init <backing-dir>          initialise a new encrypted directory\n"
+    "  %s --change-passphrase <backing-dir>  change the mount passphrase\n"
+    "  %s <backing-dir> <mountpoint>    mount an encrypted directory\n"
+    "\n"
+    "Mount options:\n"
+    "  --key=<file>    override: load master key from a raw/hex keyfile\n"
+    "  --key-fd=<n>    override: read master key from file descriptor n\n"
+    "  If neither is given, leichfs reads the passphrase from the terminal\n"
+    "  and derives the key from %s in the backing directory.\n"
+    "\n"
+    "  Any remaining arguments are passed through to FUSE (e.g. -f, -d).\n",
+    prog, prog, prog, leichfs::CONF_FILENAME);
 }
 
 int main(int argc, char* argv[]) {
-  if (argc < 2) {
-    std::fprintf(stderr,
-      "Usage: %s <mountpoint> [FUSE opts...] --root=<dir>|--root <dir>\n", argv[0]);
-    return 1;
-  }
+  if (argc < 2) { usage(argv[0]); return 1; }
 
-  std::string root;
-  std::vector<char*> fuse_args;
-  fuse_args.reserve(static_cast<size_t>(argc) + 1);
-  fuse_args.push_back(argv[0]);
-
-  if (root.empty()) {
-    std::fprintf(stderr, "Missing --root\n");
-    return 1;
-  }
-  
-  // Parse args: keep normal FUSE args; extract --root
-  int i = 1;
-  while (i < argc) {
-    if (std::strncmp(argv[i], "--root=", 7) == 0) {
-      std::string raw = argv[i] + 7;
-      root = rstrip_slash(util::expand_args(raw));
-      ++i;
-    } else if (std::strcmp(argv[i], "--root") == 0 && i + 1 < argc) {
-      std::string raw = argv[i + 1];
-      root = rstrip_slash(util::expand_args(raw));
-      i += 2;
-    } else {
-      fuse_args.push_back(argv[i]);
-      ++i;
+  // ── --init mode ───────────────────────────────────────────────────────
+  if (std::strcmp(argv[1], "--init") == 0) {
+    if (argc < 3) {
+      std::fprintf(stderr, "leichfs: --init requires a backing directory\n");
+      usage(argv[0]);
+      return 1;
     }
+    std::string dir = util::rstrip_slash(util::expand_tilde(argv[2]));
+
+    leichfs::Argon2Params kdf{};
+    for (int i = 3; i < argc; ++i) {
+      if (std::strncmp(argv[i], "--argon2-m=", 11) == 0)
+        kdf.m_cost = static_cast<uint32_t>(std::atoi(argv[i] + 11));
+      else if (std::strncmp(argv[i], "--argon2-t=", 11) == 0)
+        kdf.t_cost = static_cast<uint32_t>(std::atoi(argv[i] + 11));
+    }
+
+    return leichfs::leichfs_init(dir.c_str(), kdf) == 0 ? 0 : 1;
+  }
+
+  // ── --change-passphrase mode ──────────────────────────────────────────
+  if (std::strcmp(argv[1], "--change-passphrase") == 0) {
+    if (argc < 3) {
+      std::fprintf(stderr,
+                   "leichfs: --change-passphrase requires a backing directory\n");
+      usage(argv[0]);
+      return 1;
+    }
+    std::string dir = util::rstrip_slash(util::expand_tilde(argv[2]));
+    return leichfs::leichfs_change_passphrase(dir.c_str()) == 0 ? 0 : 1;
+  }
+
+
+  // ── Mount mode ────────────────────────────────────────────────────────
+  if (argc < 3) { usage(argv[0]); return 1; }
+
+  std::string        backing    = util::rstrip_slash(util::expand_tilde(argv[1]));
+  std::string        mountpoint = argv[2];
+  std::string        keyfile;
+  int                key_fd     = -1;
+  std::vector<char*> fuse_argv;
+  fuse_argv.reserve(static_cast<size_t>(argc));
+  fuse_argv.push_back(argv[0]);
+  fuse_argv.push_back(argv[2]);
+
+  for (int i = 3; i < argc; ++i) {
+    if (std::strncmp(argv[i], "--key=", 6) == 0)
+      keyfile = argv[i] + 6;
+    else if (std::strcmp(argv[i], "--key") == 0 && i + 1 < argc)
+      keyfile = argv[++i];
+    else if (std::strncmp(argv[i], "--key-fd=", 9) == 0)
+      key_fd = std::atoi(argv[i] + 9);
+    else
+      fuse_argv.push_back(argv[i]);
   }
 
   struct stat lst{};
-  if (lstat(root.c_str(), &lst) != 0 || !S_ISDIR(lst.st_mode)) {
-    std::fprintf(stderr, "Invalid --root: '%s' is not a directory\n", root.c_str());
-    return 1;
+  if (::lstat(backing.c_str(), &lst) != 0) {
+    std::perror("leichfs: stat backing dir"); return 1;
   }
   if (S_ISLNK(lst.st_mode)) {
-    std::fprintf(stderr, "Refusing symlink for --root: '%s'\n", root.c_str());
+    std::fprintf(stderr, "leichfs: refusing symlink as backing dir: '%s'\n",
+                 backing.c_str());
+    return 1;
+  }
+  if (!S_ISDIR(lst.st_mode)) {
+    std::fprintf(stderr, "leichfs: '%s' is not a directory\n", backing.c_str());
     return 1;
   }
 
-  // Prepare FUSE Context 
-  auto *ctx = new FSCtx{};
-  ctx->rootfd = util::validate_path(root.c_str());
-  if (ctx->rootfd == -1) {
-    std::perror("open --root failed");
-    delete ctx;
-    return 1;
+  util::unique_fd rootfd = util::validate_root_path(backing.c_str());
+  if (!rootfd) { std::perror("leichfs: open backing dir"); return 1; }
+
+  auto fuse_ctx    = std::make_unique<fs::FSCtx>();
+  fuse_ctx->rootfd = std::move(rootfd);
+
+  int key_rc = -1;
+
+  if (!keyfile.empty()) {
+    key_rc = util::enc::load_master_key_from_file(keyfile.c_str(),
+                                                  fuse_ctx->master_key.raw());
+  } else if (key_fd >= 0) {
+    char fdpath[64];
+    std::snprintf(fdpath, sizeof(fdpath), "/proc/self/fd/%d", key_fd);
+    key_rc = util::enc::load_master_key_from_file(fdpath,
+                                                  fuse_ctx->master_key.raw());
+    ::close(key_fd);
+  } else {
+    std::string conf = backing + "/" + leichfs::CONF_FILENAME;
+    if (::access(conf.c_str(), F_OK) == 0) {
+      key_rc = leichfs::load_master_key_from_conf(backing.c_str(),
+                                                  fuse_ctx->master_key.raw());
+    } else {
+      std::fprintf(stderr,
+                  "leichfs: '%s' has not been initialised.\n"
+                  "  Run: %s --init %s\n",
+                  backing.c_str(), argv[0], backing.c_str());
+      return 1;
+    }
   }
 
-  fuse_args.push_back(nullptr); // fuse_main expects argv-style NUL-terminated list
+  if (key_rc != 0) return 1;
 
-  // Dispatch to lib's ops table
+  fuse_argv.push_back(const_cast<char*>("-o"));
+  fuse_argv.push_back(const_cast<char*>("default_permissions"));
+  fuse_argv.push_back(nullptr);
+
   const fuse_operations* ops = leichfs::leichfs_ops();
-  int ret = fuse_main(static_cast<int>(fuse_args.size()) - 1, fuse_args.data(), ops, ctx);
-
-  return ret;
+  return ::fuse_main(static_cast<int>(fuse_argv.size()) - 1,
+                     fuse_argv.data(), ops, fuse_ctx.release());
 }

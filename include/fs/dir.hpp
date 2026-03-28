@@ -5,4 +5,4 @@ namespace fs {
 
 int fs_fsyncdir(const char*, int, struct fuse_file_info*);
 
-}
+} // namespace fs

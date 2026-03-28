@@ -2,9 +2,9 @@
 
 namespace fs {
 
-int fs_fsyncdir(const char *, int, struct fuse_file_info *){
+int fs_fsyncdir(const char* /*path*/, int /*datasync*/,
+                struct fuse_file_info* /*fi*/) {
   return 0;
 }
 
-}
-
+} // namespace fs

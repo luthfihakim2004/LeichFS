@@ -5,4 +5,4 @@ namespace leichfs {
 
 const fuse_operations* leichfs_ops() noexcept;
 
-}// namespace
+}// namespace leichfs
