@@ -88,20 +88,8 @@ int main(int argc, char* argv[]) {
       fuse_argv.push_back(argv[i]);
   }
 
-  struct stat lst{};
-  if (::lstat(backing.c_str(), &lst) != 0) {
-    std::perror("leichfs: stat backing dir"); return 1;
-  }
-  if (S_ISLNK(lst.st_mode)) {
-    std::fprintf(stderr, "leichfs: refusing symlink as backing dir: '%s'\n",
-                 backing.c_str());
-    return 1;
-  }
-  if (!S_ISDIR(lst.st_mode)) {
-    std::fprintf(stderr, "leichfs: '%s' is not a directory\n", backing.c_str());
-    return 1;
-  }
-
+  // If user specify the keyfile, it's considered still safe
+  // since the process runs with user's privileges
   util::unique_fd rootfd = util::validate_root_path(backing.c_str());
   if (!rootfd) { std::perror("leichfs: open backing dir"); return 1; }
 
