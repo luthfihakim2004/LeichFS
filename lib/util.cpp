@@ -24,34 +24,6 @@
 // ────────────────────────────────────────────────────────────────────────────
 namespace util {
 
-// translate `~` into home variable and return the value
-std::string expand_tilde(const std::string& path) {
-  if (path.empty() || path[0] != '~') return path;
-
-  if (path.size() == 1 || path[1] == '/') {
-    const char* h = std::getenv("HOME");
-    if (!h) {
-      if (auto* pw = ::getpwuid(::getuid())) h = pw->pw_dir;
-    }
-    return (h ? std::string(h) : std::string{}) + path.substr(1);
-  }
-
-  size_t slash = path.find('/');
-  std::string user = path.substr(1, slash == std::string::npos ? std::string::npos
-                                                                : slash - 1);
-  if (auto* pw = ::getpwnam(user.c_str())) {
-    return std::string(pw->pw_dir)
-       + (slash == std::string::npos ? "" : path.substr(slash));
-  }
-  return path;
-}
-
-// Strip the last `/` in the path
-std::string rstrip_slash(std::string p) {
-  if (p.size() > 1 && p.back() == '/') p.pop_back();
-  return p;
-}
-
 // Validate the requirements of the backing dir
 unique_fd validate_root_path(const char* path) {
   struct open_how how{};

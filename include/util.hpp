@@ -106,12 +106,6 @@ struct parent_path {
 
 // ── Path helpers ─────────────────────────────────────────────────────────────
 
-// Expand leading ~ / ~user in path using $HOME / getpwuid / getpwnam.
-std::string expand_tilde(const std::string& path);
-
-// Remove trailing slash from path (preserves bare "/").
-std::string rstrip_slash(std::string p);
-
 // Open path as O_PATH|O_DIRECTORY with RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS.
 // Returns a valid unique_fd on success, an invalid one on failure (errno set).
 unique_fd validate_root_path(const char* path);

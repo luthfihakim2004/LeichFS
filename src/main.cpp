@@ -5,6 +5,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
+#include <filesystem>
 
 #include "fs/core.hpp"
 #include "leichfs/dispatch.hpp"
@@ -38,7 +39,7 @@ int main(int argc, char* argv[]) {
       usage(argv[0]);
       return 1;
     }
-    std::string dir = util::rstrip_slash(util::expand_tilde(argv[2]));
+    std::filesystem::path dir = std::filesystem::path(argv[2]);
 
     leichfs::Argon2Params kdf{};
     for (int i = 3; i < argc; ++i) {
@@ -59,7 +60,7 @@ int main(int argc, char* argv[]) {
       usage(argv[0]);
       return 1;
     }
-    std::string dir = util::rstrip_slash(util::expand_tilde(argv[2]));
+    std::filesystem::path dir = std::filesystem::path(argv[2]);
     return leichfs::leichfs_change_passphrase(dir.c_str()) == 0 ? 0 : 1;
   }
 
@@ -67,11 +68,11 @@ int main(int argc, char* argv[]) {
   // ── Mount mode ────────────────────────────────────────────────────────
   if (argc < 3) { usage(argv[0]); return 1; }
 
-  std::string        backing    = util::rstrip_slash(util::expand_tilde(argv[1]));
-  std::string        mountpoint = argv[2];
-  std::string        keyfile;
-  int                key_fd     = -1;
-  std::vector<char*> fuse_argv;
+  std::filesystem::path backing    = std::filesystem::path(argv[1]);
+  std::string           mountpoint = argv[2];
+  std::string           keyfile;
+  int                   key_fd     = -1;
+  std::vector<char*>    fuse_argv;
   fuse_argv.reserve(static_cast<size_t>(argc));
   fuse_argv.push_back(argv[0]);
   fuse_argv.push_back(argv[2]);
@@ -119,7 +120,7 @@ int main(int argc, char* argv[]) {
                                                   fuse_ctx->master_key.raw());
     ::close(key_fd);
   } else {
-    std::string conf = backing + "/" + leichfs::CONF_FILENAME;
+    std::filesystem::path conf = backing / leichfs::CONF_FILENAME;
     if (::access(conf.c_str(), F_OK) == 0) {
       key_rc = leichfs::load_master_key_from_conf(backing.c_str(),
                                                   fuse_ctx->master_key.raw());
