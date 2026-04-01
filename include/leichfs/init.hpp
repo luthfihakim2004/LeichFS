@@ -12,9 +12,9 @@ inline constexpr const char* CONF_FILENAME = ".leichfs.conf";
 
 // Argon2id parameters stored in the config file.
 struct Argon2Params {
-    uint32_t m_cost{65536};  // memory in KiB  (64 MiB)
-    uint32_t t_cost{3};      // iterations
-    uint32_t parallelism{1};
+  uint32_t m_cost{65536};  // memory in KiB  (64 MiB)
+  uint32_t t_cost{3};      // iterations
+  uint32_t parallelism{1};
 };
 
 // ── Init ────────────────────────────────────────────────────────────────────

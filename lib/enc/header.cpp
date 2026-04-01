@@ -13,7 +13,8 @@ int read_header(int fd, Header& h) {
   static constexpr uint8_t MAGIC[8] = {'L','E','I','C','H','F','S','X'};
   if (std::memcmp(h.magic, MAGIC, 8) != 0)                    return -2;
   if (h.version != ENC_VERSION)                                return -3;
-  if (h.chunk_sz == 0 || h.chunk_sz > (8u << 20))             return -4;
+  if (h.chunk_sz == 0 || h.chunk_sz > (8u << 20))             return -4; // safety bound
+  if (h.chunk_sz != CHUNK_SIZE)                                return -5;
   return 0;
 }
 

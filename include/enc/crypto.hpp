@@ -19,10 +19,10 @@ namespace enc {
 //
 // Returns 0 on success, -1 on OpenSSL error.
 int derive_file_material(
-    const std::array<uint8_t, KEY_SIZE>& master_key,
-    const uint8_t                        salt[SALT_SIZE],
-    std::array<uint8_t, KEY_SIZE>&       file_key,
-    std::array<uint8_t, NONCE_SIZE>&     nonce_base);
+  const std::array<uint8_t, KEY_SIZE>& master_key,
+  const uint8_t                        salt[SALT_SIZE],
+  std::array<uint8_t, KEY_SIZE>&       file_key,
+  std::array<uint8_t, NONCE_SIZE>&     nonce_base);
 
 
 // ── AES-256-GCM primitives ───────────────────────────────────────────────────
@@ -35,19 +35,19 @@ int derive_file_material(
 // Returns 0 on success, -1 on error (decrypt also returns -1 on tag mismatch).
 
 int aesgcm_encrypt(
-    const uint8_t  key  [KEY_SIZE],
-    const uint8_t  nonce[NONCE_SIZE],
-    const uint8_t* pt,   size_t pt_len,
-    const uint8_t* aad,  size_t aad_len,
-    uint8_t*       ct,                    // caller allocates pt_len bytes
-    uint8_t        tag  [TAG_SIZE]);
+  const uint8_t  key  [KEY_SIZE],
+  const uint8_t  nonce[NONCE_SIZE],
+  const uint8_t* pt,   size_t pt_len,
+  const uint8_t* aad,  size_t aad_len,
+  uint8_t*       ct,                    // caller allocates pt_len bytes
+  uint8_t        tag  [TAG_SIZE]);
 
 int aesgcm_decrypt(
-    const uint8_t  key  [KEY_SIZE],
-    const uint8_t  nonce[NONCE_SIZE],
-    const uint8_t* ct,   size_t ct_len,
-    const uint8_t* aad,  size_t aad_len,
-    const uint8_t  tag  [TAG_SIZE],
-    uint8_t*       pt);                   // caller allocates ct_len bytes
+  const uint8_t  key  [KEY_SIZE],
+  const uint8_t  nonce[NONCE_SIZE],
+  const uint8_t* ct,   size_t ct_len,
+  const uint8_t* aad,  size_t aad_len,
+  const uint8_t  tag  [TAG_SIZE],
+  uint8_t*       pt);                   // caller allocates ct_len bytes
 
 } // namespace enc

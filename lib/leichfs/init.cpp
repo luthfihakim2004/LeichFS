@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
+#include <filesystem>
 #include <string>
 #include <sys/stat.h>
 #include <termios.h>
@@ -101,13 +102,13 @@ static int from_hex(const std::string& s, uint8_t* out, size_t n) {
 }
 
 // Write config file atomically (write to .tmp, then rename)
-static int write_conf(const std::string& path,
+static int write_conf(const std::filesystem::path& path,
                       const Argon2Params& p,
                       const uint8_t salt[enc::SALT_SIZE],
                       const uint8_t wrapped_key[enc::KEY_SIZE],
                       const uint8_t wrap_nonce[enc::NONCE_SIZE],
                       const uint8_t wrap_tag[enc::TAG_SIZE]) {
-  std::string tmp = path + ".tmp";
+  std::string tmp = path.string() + ".tmp";
 
   int fd = ::open(tmp.c_str(),
                   O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
@@ -148,7 +149,7 @@ static int write_conf(const std::string& path,
 
 // Parse the config file — returns 0 on success
 // This is a minimal hand-rolled parser for known fixed schema
-static int parse_conf(const std::string& path,
+static int parse_conf(const std::filesystem::path& path,
                       Argon2Params&   p,
                       std::array<uint8_t, enc::SALT_SIZE>&   salt,
                       std::array<uint8_t, enc::KEY_SIZE>&    wrapped_key,
@@ -210,15 +211,19 @@ static int parse_conf(const std::string& path,
 // ── Public API ────────────────────────────────────────────────────────────────
 
 int leichfs_init(const char* dir, const Argon2Params& params) {
-  // Verify dir exists and is a directory
-  struct stat st{};
-  if (::stat(dir, &st) != 0 || !S_ISDIR(st.st_mode)) {
+  std::error_code ec;
+  std::filesystem::path backing{dir};
+  if (!std::filesystem::exists(backing, ec) || ec) {
+    std::fprintf(stderr, "[leichfs] --init: '%s' does not exist or is inaccessible\n", dir);
+    return -1;
+  }
+  if (!std::filesystem::is_directory(backing, ec) || ec) {
     std::fprintf(stderr, "[leichfs] --init: '%s' is not a directory\n", dir);
     return -1;
   }
 
   // Check that it isn't already initialised
-  std::string conf_path = std::string(dir) + "/" + CONF_FILENAME;
+  std::filesystem::path conf_path = backing / CONF_FILENAME;
   if (::access(conf_path.c_str(), F_OK) == 0) {
     std::fprintf(stderr,
       "[leichfs] '%s' is already initialised (%s exists)\n"
@@ -309,8 +314,8 @@ int leichfs_init(const char* dir, const Argon2Params& params) {
 
 int load_master_key_from_conf(const char* dir,
                               std::array<uint8_t, enc::KEY_SIZE>& out) {
-  std::string conf_path = std::string(dir) + "/" + CONF_FILENAME;
-
+  std::filesystem::path conf_path = std::filesystem::path{dir} / CONF_FILENAME;
+  
   Argon2Params p{};
   std::array<uint8_t, enc::SALT_SIZE>   salt{};
   std::array<uint8_t, enc::KEY_SIZE>    wrapped_key{};
@@ -352,7 +357,7 @@ int load_master_key_from_conf(const char* dir,
 }
 
 int leichfs_change_passphrase(const char* dir) {
-  std::string conf_path = std::string(dir) + "/" + CONF_FILENAME;
+  std::filesystem::path conf_path = std::filesystem::path{dir} / CONF_FILENAME;
 
   // Load and parse existing config 
   Argon2Params p{};
