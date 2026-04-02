@@ -1,6 +1,5 @@
-# Design & Threat Model
-## Cryptographic design
-### Key management
+# Cryptographic design
+## Key management
 
 LeichFS uses three-level key hierarchy to separate responsibilities and limit sensitive material exposure.
 
@@ -12,7 +11,7 @@ LeichFS uses three-level key hierarchy to separate responsibilities and limit se
 
 ![Key management flow](key-flow.png)
 
-### Additional Authenticated Data (AAD)
+## Additional Authenticated Data (AAD)
 
 Each chunk of ciphertext is authenticated with a 40-byte AAD, which is costructed as:
 
@@ -28,8 +27,8 @@ The AAD itself is never stored explicitly on disk. It is reconstructed from the 
 
 _This is intentional to prevent chunk-level attacks. See [Chunk](#chunk) section below_
 
-## File Format
-### Header
+# File Format
+## Header
 
 ```
  8 bytes  magic          ASCII literal "LEICHFSX"
@@ -43,7 +42,7 @@ _This is intentional to prevent chunk-level attacks. See [Chunk](#chunk) section
 Total header size: **64 bytes** (enforced by `static_assert`).
 
 
-### Chunk
+## Chunk
 
 Each chunk stores exactly a single unit of plaintext for up to 65536 bytes (64 KiB). Chunks are stored sequentially, immediately after the header with no gaps between them. 
 
@@ -53,11 +52,11 @@ Each chunk stores exactly a single unit of plaintext for up to 65536 bytes (64 K
 16 bytes  tag            AES-256-GCM authentication tag
 ```
 
-#### Nonce
+### Nonce
 
 Nonce is constructed from 8 random bytes returned by `getrandom(2)`, followed by the chunk index encoded as a big-endian 32-bit integer.
 
-### Offset formula
+## Offset formula
 
 The byte offset of chunk `i` in the backing file is:
 
@@ -74,7 +73,7 @@ num_chunks        = ceil(N / 65536)
 last_chunk_plain  = N mod 65536   (or 65536 if N is an exact multiple)
 on_disk_size      = 64 + (num_chunks - 1) × 65564 + 12 + last_chunk_plain + 16
 ```
-### Storage overhead
+## Storage overhead
 
 
 ```
@@ -102,7 +101,7 @@ Comparison with gocryptfs:
 |Block size| 65536 | 4096 |
 |Per-block Overhead| 0.043% | 0.781% |
 
-### Examples
+## Examples
 
 **0-byte file:**
 
