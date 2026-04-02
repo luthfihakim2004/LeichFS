@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <vector>
 
+#include "fs/core.hpp"
 #include "enc/crypto.hpp"
 #include "enc/params.hpp"
 #include "util.hpp"
@@ -267,6 +268,21 @@ int leichfs_init(const char* dir, const Argon2Params& params) {
   }
   OPENSSL_cleanse(pass1.data(), pass1.size());
 
+  enc::UniqueEvpCipherCtx wrap_ctx{EVP_CIPHER_CTX_new()};
+  if (!wrap_ctx) { 
+    OPENSSL_cleanse(master_key.data(), master_key.size());
+    OPENSSL_cleanse(wrap_key.data(), wrap_key.size());
+    return -1; 
+  }
+  if (EVP_EncryptInit_ex(wrap_ctx.get(), EVP_aes_256_gcm(),
+                         nullptr, nullptr, nullptr) != 1 ||
+      EVP_CIPHER_CTX_ctrl(wrap_ctx.get(), EVP_CTRL_GCM_SET_IVLEN,
+                          static_cast<int>(enc::NONCE_SIZE), nullptr) != 1) {
+    OPENSSL_cleanse(master_key.data(), master_key.size());
+    OPENSSL_cleanse(wrap_key.data(), wrap_key.size());
+    return -1;
+  }
+
   // Wrap master key with AES-256-GCM using the derived wrapping key.
   std::array<uint8_t, enc::NONCE_SIZE> wrap_nonce{};
   std::array<uint8_t, enc::KEY_SIZE>   wrapped_key{};
@@ -278,7 +294,8 @@ int leichfs_init(const char* dir, const Argon2Params& params) {
     return -1;
   }
 
-  if (enc::aesgcm_encrypt(wrap_key.data(), wrap_nonce.data(),
+  if (enc::aesgcm_encrypt(wrap_ctx.get(),
+                          wrap_key.data(), wrap_nonce.data(),
                           master_key.data(), enc::KEY_SIZE,
                           WRAP_AAD, sizeof(WRAP_AAD) - 1,
                           wrapped_key.data(),
@@ -341,8 +358,18 @@ int load_master_key_from_conf(const char* dir,
   }
   OPENSSL_cleanse(pass.data(), pass.size());
 
+  enc::UniqueEvpCipherCtx unwrap_ctx{EVP_CIPHER_CTX_new()};
+  if (!unwrap_ctx) { OPENSSL_cleanse(wrap_key.data(), wrap_key.size()); return -1; }
+  if (EVP_DecryptInit_ex(unwrap_ctx.get(), EVP_aes_256_gcm(),
+                         nullptr, nullptr, nullptr) != 1 ||
+      EVP_CIPHER_CTX_ctrl(unwrap_ctx.get(), EVP_CTRL_GCM_SET_IVLEN,
+                          static_cast<int>(enc::NONCE_SIZE), nullptr) != 1) {
+    OPENSSL_cleanse(wrap_key.data(), wrap_key.size()); return -1;
+  }
+  
   // Decrypt (unwrap) wrapped_key stored in the config file
-  int rc = enc::aesgcm_decrypt(wrap_key.data(), wrap_nonce.data(),
+  int rc = enc::aesgcm_decrypt(unwrap_ctx.get(),
+                               wrap_key.data(), wrap_nonce.data(),
                                wrapped_key.data(), enc::KEY_SIZE,
                                WRAP_AAD, sizeof(WRAP_AAD) - 1,
                                wrap_tag.data(),
@@ -384,8 +411,18 @@ int leichfs_change_passphrase(const char* dir) {
   }
   OPENSSL_cleanse(old_pass.data(), old_pass.size());
 
+  enc::UniqueEvpCipherCtx unwrap_ctx{EVP_CIPHER_CTX_new()};
+  if (!unwrap_ctx) { OPENSSL_cleanse(old_wrap_key.data(), old_wrap_key.size()); return -1; }
+  if (EVP_DecryptInit_ex(unwrap_ctx.get(), EVP_aes_256_gcm(),
+                         nullptr, nullptr, nullptr) != 1 ||
+      EVP_CIPHER_CTX_ctrl(unwrap_ctx.get(), EVP_CTRL_GCM_SET_IVLEN,
+                          static_cast<int>(enc::NONCE_SIZE), nullptr) != 1) {
+    OPENSSL_cleanse(old_wrap_key.data(), old_wrap_key.size()); return -1;
+  }
+
   std::array<uint8_t, enc::KEY_SIZE> master_key{};
-  int rc = enc::aesgcm_decrypt(old_wrap_key.data(), wrap_nonce.data(),
+  int rc = enc::aesgcm_decrypt(unwrap_ctx.get(),
+                               old_wrap_key.data(), wrap_nonce.data(),
                                wrapped_key.data(), enc::KEY_SIZE,
                                WRAP_AAD, sizeof(WRAP_AAD) - 1,
                                wrap_tag.data(),
@@ -432,6 +469,21 @@ int leichfs_change_passphrase(const char* dir) {
   }
   OPENSSL_cleanse(new_pass1.data(), new_pass1.size());
 
+  enc::UniqueEvpCipherCtx wrap_ctx{EVP_CIPHER_CTX_new()};
+  if (!wrap_ctx) { 
+    OPENSSL_cleanse(master_key.data(), master_key.size());
+    OPENSSL_cleanse(new_wrap_key.data(), new_wrap_key.size());
+    return -1; 
+  }
+  if (EVP_EncryptInit_ex(wrap_ctx.get(), EVP_aes_256_gcm(),
+                         nullptr, nullptr, nullptr) != 1 ||
+      EVP_CIPHER_CTX_ctrl(wrap_ctx.get(), EVP_CTRL_GCM_SET_IVLEN,
+                          static_cast<int>(enc::NONCE_SIZE), nullptr) != 1) {
+    OPENSSL_cleanse(master_key.data(), master_key.size());
+    OPENSSL_cleanse(new_wrap_key.data(), new_wrap_key.size());
+    return -1;
+  }
+
   std::array<uint8_t, enc::NONCE_SIZE> new_nonce{};
   std::array<uint8_t, enc::KEY_SIZE>   new_wrapped{};
   std::array<uint8_t, enc::TAG_SIZE>   new_tag{};
@@ -442,7 +494,8 @@ int leichfs_change_passphrase(const char* dir) {
     return -1;
   }
 
-  if (enc::aesgcm_encrypt(new_wrap_key.data(), new_nonce.data(),
+  if (enc::aesgcm_encrypt(wrap_ctx.get(),
+                          new_wrap_key.data(), new_nonce.data(),
                           master_key.data(), enc::KEY_SIZE,
                           WRAP_AAD, sizeof(WRAP_AAD) - 1,
                           new_wrapped.data(),

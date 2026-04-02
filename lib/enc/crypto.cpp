@@ -17,11 +17,6 @@ struct EvpPkeyCtxDeleter {
 };
 using UniqueEvpPkeyCtx = std::unique_ptr<EVP_PKEY_CTX, EvpPkeyCtxDeleter>;
 
-struct EvpCipherCtxDeleter {
-  void operator()(EVP_CIPHER_CTX* p) const noexcept { EVP_CIPHER_CTX_free(p); }
-};
-using UniqueEvpCipherCtx = std::unique_ptr<EVP_CIPHER_CTX, EvpCipherCtxDeleter>;
-
 // Run one HKDF-SHA256 extract+expand into out[0..outlen]).
 // Returns 0 on success, -1 on OpenSSL error.
 int hkdf_derive(const uint8_t* key,   size_t key_len,
@@ -74,6 +69,7 @@ int derive_file_material(
 }
 
 int aesgcm_encrypt(
+        EVP_CIPHER_CTX* c,
         const uint8_t  key  [KEY_SIZE],
         const uint8_t  nonce[NONCE_SIZE],
         const uint8_t* pt,   size_t pt_len,
@@ -81,31 +77,25 @@ int aesgcm_encrypt(
         uint8_t*       ct,
         uint8_t        tag  [TAG_SIZE]) {
 
-  UniqueEvpCipherCtx c{EVP_CIPHER_CTX_new()};
-  if (!c) return -1;
-
   int outl = 0, tmplen = 0;
 
-  if (EVP_EncryptInit_ex(c.get(), EVP_aes_256_gcm(),
-                         nullptr, nullptr, nullptr) != 1)              return -1;
-  if (EVP_CIPHER_CTX_ctrl(c.get(), EVP_CTRL_GCM_SET_IVLEN,
-                          static_cast<int>(NONCE_SIZE), nullptr) != 1) return -1;
-  if (EVP_EncryptInit_ex(c.get(), nullptr, nullptr, key, nonce) != 1)  return -1;
+  if (EVP_EncryptInit_ex(c, nullptr, nullptr, key, nonce) != 1)  return -1;
 
   if (aad_len > 0 &&
-      EVP_EncryptUpdate(c.get(), nullptr, &tmplen,
+      EVP_EncryptUpdate(c, nullptr, &tmplen,
                         aad, static_cast<int>(aad_len)) != 1)          return -1;
 
-  if (EVP_EncryptUpdate(c.get(), ct, &outl,
+  if (EVP_EncryptUpdate(c, ct, &outl,
                         pt, static_cast<int>(pt_len)) != 1)            return -1;
-  if (EVP_EncryptFinal_ex(c.get(), ct + outl, &tmplen) != 1)           return -1;
-  if (EVP_CIPHER_CTX_ctrl(c.get(), EVP_CTRL_GCM_GET_TAG,
+  if (EVP_EncryptFinal_ex(c, ct + outl, &tmplen) != 1)           return -1;
+  if (EVP_CIPHER_CTX_ctrl(c, EVP_CTRL_GCM_GET_TAG,
                           static_cast<int>(TAG_SIZE), tag) != 1)       return -1;
 
   return (outl + tmplen == static_cast<int>(pt_len)) ? 0 : -1;
 }
 
 int aesgcm_decrypt(
+        EVP_CIPHER_CTX* c,
         const uint8_t  key  [KEY_SIZE],
         const uint8_t  nonce[NONCE_SIZE],
         const uint8_t* ct,   size_t ct_len,
@@ -113,31 +103,24 @@ int aesgcm_decrypt(
         const uint8_t  tag  [TAG_SIZE],
         uint8_t*       pt) {
 
-  UniqueEvpCipherCtx c{EVP_CIPHER_CTX_new()};
-  if (!c) return -1;
-
   int outl = 0, tmplen = 0;
 
-  if (EVP_DecryptInit_ex(c.get(), EVP_aes_256_gcm(),
-                         nullptr, nullptr, nullptr) != 1)              return -1;
-  if (EVP_CIPHER_CTX_ctrl(c.get(), EVP_CTRL_GCM_SET_IVLEN,
-                          static_cast<int>(NONCE_SIZE), nullptr) != 1) return -1;
-  if (EVP_DecryptInit_ex(c.get(), nullptr, nullptr, key, nonce) != 1)  return -1;
+  if (EVP_DecryptInit_ex(c, nullptr, nullptr, key, nonce) != 1)  return -1;
 
   if (aad_len > 0 &&
-      EVP_DecryptUpdate(c.get(), nullptr, &tmplen,
+      EVP_DecryptUpdate(c, nullptr, &tmplen,
                         aad, static_cast<int>(aad_len)) != 1)          return -1;
 
-  if (EVP_DecryptUpdate(c.get(), pt, &outl,
+  if (EVP_DecryptUpdate(c, pt, &outl,
                         ct, static_cast<int>(ct_len)) != 1)            return -1;
 
   // Set the expected tag BEFORE calling Final (OpenSSL requirement).
-  if (EVP_CIPHER_CTX_ctrl(c.get(), EVP_CTRL_GCM_SET_TAG,
+  if (EVP_CIPHER_CTX_ctrl(c, EVP_CTRL_GCM_SET_TAG,
                           static_cast<int>(TAG_SIZE),
                           const_cast<uint8_t*>(tag)) != 1)             return -1;
 
   // Final returns <= 0 on authentication failure.
-  if (EVP_DecryptFinal_ex(c.get(), pt + outl, &tmplen) <= 0)           return -1;
+  if (EVP_DecryptFinal_ex(c, pt + outl, &tmplen) <= 0)           return -1;
 
   return 0;
 }

@@ -286,7 +286,8 @@ int fs_truncate(const char* path, off_t size, struct fuse_file_info* fi) {
     uint8_t aad[enc::AAD_PREFIX_LEN + 8];
     make_aad(idx, aad);
 
-    return enc::aesgcm_decrypt(fh->file_key.data(),
+    return enc::aesgcm_decrypt(fh->dec_ctx.get(),
+                               fh->file_key.data(),
                                cbuf.data(),
                                cbuf.data() + enc::NONCE_SIZE, ex_len,
                                aad, sizeof(aad),
@@ -306,7 +307,8 @@ int fs_truncate(const char* path, off_t size, struct fuse_file_info* fi) {
     uint8_t aad[enc::AAD_PREFIX_LEN + 8];
     make_aad(idx, aad);
 
-    if (enc::aesgcm_encrypt(fh->file_key.data(),
+    if (enc::aesgcm_encrypt(fh->enc_ctx.get(),
+                            fh->file_key.data(),
                             cbuf.data(),
                             pbuf.data(), plain_len,
                             aad, sizeof(aad),

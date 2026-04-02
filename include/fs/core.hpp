@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <openssl/evp.h>
 #include <shared_mutex>
 #include <sys/types.h>
 #include <unordered_map>
@@ -14,6 +15,15 @@
 
 #include "enc/params.hpp"
 #include "util.hpp"
+
+namespace enc {
+
+struct EvpCipherCtxDeleter {
+  void operator()(EVP_CIPHER_CTX* p) const noexcept { EVP_CIPHER_CTX_free(p); }
+};
+using UniqueEvpCipherCtx = std::unique_ptr<EVP_CIPHER_CTX, EvpCipherCtxDeleter>;
+
+} // namespace enc 
 
 namespace fs {
 
@@ -133,7 +143,10 @@ struct FH {
   util::secure_array<enc::KEY_SIZE>          file_key;
   std::array<uint8_t, enc::NONCE_SIZE>       nonce_base{};
   std::array<uint8_t, enc::AAD_PREFIX_LEN>   aad_prefix{};
+  enc::UniqueEvpCipherCtx  enc_ctx;
+  enc::UniqueEvpCipherCtx  dec_ctx; 
 
+  std::mutex dec_mtx; // serialize dec_ctx across concurrent readers
   std::shared_ptr<SharedResState> shared;
 
   bool wr{false}; // true when opened with write access

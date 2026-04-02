@@ -5,6 +5,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <openssl/evp.h>
 #include <shared_mutex>
 #include <sys/types.h>
 #include <vector>
@@ -51,6 +52,26 @@ static std::unique_ptr<FH> make_fh(int         fd_raw,
     return nullptr;
   }
   // master_key stays in FSCtx — never copied, never zeroed here.
+
+  // Initialize reusable EVP contexts — cipher and IV length set once here,
+  // re-keyed on every encrypt/decrypt call without reallocation.
+  fh->enc_ctx.reset(EVP_CIPHER_CTX_new());
+  fh->dec_ctx.reset(EVP_CIPHER_CTX_new());
+  if (!fh->enc_ctx || !fh->dec_ctx) { out_err = -EIO; return nullptr; }
+
+  if (EVP_EncryptInit_ex(fh->enc_ctx.get(), EVP_aes_256_gcm(),
+                         nullptr, nullptr, nullptr) != 1 ||
+      EVP_CIPHER_CTX_ctrl(fh->enc_ctx.get(), EVP_CTRL_GCM_SET_IVLEN,
+                          static_cast<int>(enc::NONCE_SIZE), nullptr) != 1) {
+    out_err = -EIO; return nullptr;
+  }
+
+  if (EVP_DecryptInit_ex(fh->dec_ctx.get(), EVP_aes_256_gcm(),
+                         nullptr, nullptr, nullptr) != 1 ||
+      EVP_CIPHER_CTX_ctrl(fh->dec_ctx.get(), EVP_CTRL_GCM_SET_IVLEN,
+                          static_cast<int>(enc::NONCE_SIZE), nullptr) != 1) {
+    out_err = -EIO; return nullptr;
+  }
 
   util::enc::build_aad_prefix(fh->aad_prefix, h);
   out_err = 0;
@@ -201,14 +222,18 @@ int fs_read(const char* /*path*/, char* buf, size_t size, off_t offset,
     make_aad(*fh, chunk_idx, aad);
 
     std::vector<uint8_t> pbuf(plain_len);
-    if (enc::aesgcm_decrypt(
-            fh->file_key.data(),
-            cbuf.data(),                              // nonce
-            cbuf.data() + enc::NONCE_SIZE, plain_len, // ct
-            aad, sizeof(aad),
-            cbuf.data() + enc::NONCE_SIZE + plain_len, // tag
-            pbuf.data()) != 0)
-      return -EBADMSG;
+    {
+      std::lock_guard dec_lk(fh->dec_mtx);
+      if (enc::aesgcm_decrypt(
+              fh->dec_ctx.get(),
+              fh->file_key.data(),
+              cbuf.data(),                              // nonce
+              cbuf.data() + enc::NONCE_SIZE, plain_len, // ct
+              aad, sizeof(aad),
+              cbuf.data() + enc::NONCE_SIZE + plain_len, // tag
+              pbuf.data()) != 0)
+        return -EBADMSG;
+    }
 
     const size_t src_off = (chunk_idx == util::fs::chunk_index(off, csz))
                          ? first_off : 0;
@@ -272,7 +297,8 @@ int fs_write(const char* /*path*/, const char* buf, size_t size, off_t offset,
       uint8_t aad[enc::AAD_PREFIX_LEN + 8];
       make_aad(*fh, chunk_idx, aad);
 
-      if (enc::aesgcm_decrypt(fh->file_key.data(),
+      if (enc::aesgcm_decrypt(fh->dec_ctx.get(),
+                              fh->file_key.data(),
                               cbuf.data(),
                               cbuf.data() + enc::NONCE_SIZE, ex_len,
                               aad, sizeof(aad),
@@ -295,7 +321,8 @@ int fs_write(const char* /*path*/, const char* buf, size_t size, off_t offset,
     uint8_t aad[enc::AAD_PREFIX_LEN + 8];
     make_aad(*fh, chunk_idx, aad);
 
-    if (enc::aesgcm_encrypt(fh->file_key.data(),
+    if (enc::aesgcm_encrypt(fh->enc_ctx.get(),
+                            fh->file_key.data(),
                             cbuf.data(),                      // nonce
                             pbuf.data(), out_plen,
                             aad, sizeof(aad),
@@ -438,7 +465,8 @@ int fs_fallocate(const char* /*path*/, int mode, off_t offset, off_t length,
         uint8_t aad[enc::AAD_PREFIX_LEN + 8];
         make_aad(*fh, idx, aad);
 
-        if (enc::aesgcm_decrypt(fh->file_key.data(),
+        if (enc::aesgcm_decrypt(fh->dec_ctx.get(),
+                                fh->file_key.data(),
                                 cbuf.data(),
                                 cbuf.data() + enc::NONCE_SIZE, ex_len,
                                 aad, sizeof(aad),
@@ -457,7 +485,8 @@ int fs_fallocate(const char* /*path*/, int mode, off_t offset, off_t length,
       uint8_t aad[enc::AAD_PREFIX_LEN + 8];
       make_aad(*fh, idx, aad);
 
-      if (enc::aesgcm_encrypt(fh->file_key.data(),
+      if (enc::aesgcm_encrypt(fh->enc_ctx.get(),
+                              fh->file_key.data(),
                               cbuf.data(),
                               pbuf.data(), out_len,
                               aad, sizeof(aad),

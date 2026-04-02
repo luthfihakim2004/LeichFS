@@ -2,6 +2,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <openssl/evp.h>
 
 #include "enc/params.hpp"
 
@@ -35,6 +36,7 @@ int derive_file_material(
 // Returns 0 on success, -1 on error (decrypt also returns -1 on tag mismatch).
 
 int aesgcm_encrypt(
+  EVP_CIPHER_CTX* ctx,
   const uint8_t  key  [KEY_SIZE],
   const uint8_t  nonce[NONCE_SIZE],
   const uint8_t* pt,   size_t pt_len,
@@ -43,6 +45,7 @@ int aesgcm_encrypt(
   uint8_t        tag  [TAG_SIZE]);
 
 int aesgcm_decrypt(
+  EVP_CIPHER_CTX* ctx,
   const uint8_t  key  [KEY_SIZE],
   const uint8_t  nonce[NONCE_SIZE],
   const uint8_t* ct,   size_t ct_len,
