@@ -136,8 +136,8 @@ int fs_open(const char* path, struct fuse_file_info* fi) {
 
   const int acc = fi->flags & O_ACCMODE;
   int oflags = O_CLOEXEC | O_NOFOLLOW;
-  // Propagate safe status flags the caller requested.
-  oflags |= fi->flags & (O_DIRECT | O_SYNC | O_DSYNC
+  // Propagate safe status flags to the backing fd.
+  oflags |= fi->flags & (O_SYNC | O_DSYNC
 #ifdef O_NOATIME
                          | O_NOATIME
 #endif
