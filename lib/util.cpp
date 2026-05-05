@@ -202,9 +202,10 @@ uint64_t be64toh_u64(uint64_t x) noexcept {
 
 // AAD[40] layout:
 // magic[8] || be32(version)[4] || be32(chunk_sz)[4] || salt[32] || be64(chunk_idx)[8]
-void build_aad(uint8_t* out, const std::array<uint8_t,
+void build_aad(std::span<uint8_t, ::enc::AAD_PREFIX_LEN + 8> out, 
+               const std::array<uint8_t,
                ::enc::AAD_PREFIX_LEN>& prefix, uint64_t chunk_idx) noexcept {
-  std::memcpy(out, prefix.data(), ::enc::AAD_PREFIX_LEN);
+  std::memcpy(out.data(), prefix.data(), ::enc::AAD_PREFIX_LEN);
   // chunk_idx in big-endian (canonical counter encoding)
   for (int i = 0; i < 8; ++i)
     out[::enc::AAD_PREFIX_LEN + i] = static_cast<uint8_t>(chunk_idx >> (56 - 8 * i));

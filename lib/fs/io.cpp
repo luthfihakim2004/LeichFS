@@ -80,7 +80,7 @@ static std::unique_ptr<FH> make_fh(int         fd_raw,
 
 // Build the full 40-byte AAD for chunk_idx and store it in aad_out[].
 static inline void make_aad(const FH& fh, uint64_t chunk_idx,
-                             uint8_t aad_out[enc::AAD_PREFIX_LEN + 8]) {
+                             uint8_t (&aad_out)[enc::AAD_PREFIX_LEN + 8]) {
   util::enc::build_aad(aad_out, fh.aad_prefix, chunk_idx);
 }
 

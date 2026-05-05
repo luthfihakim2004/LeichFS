@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <dirent.h>
 #include <fcntl.h>
+#include <span>
 #include <openssl/crypto.h>
 #include <string>
 #include <unistd.h>
@@ -167,7 +168,7 @@ uint64_t be64toh_u64(uint64_t x) noexcept;
 
 // Build the 40-byte AAD block:  aad_prefix[AAD_PREFIX_LEN] || be64(chunk_idx).
 // out must point to at least AAD_PREFIX_LEN + 8 bytes.
-void build_aad(uint8_t* out,
+void build_aad(std::span<uint8_t, ::enc::AAD_PREFIX_LEN + 8> out,
                const std::array<uint8_t, ::enc::AAD_PREFIX_LEN>& prefix,
                uint64_t chunk_idx) noexcept;
 

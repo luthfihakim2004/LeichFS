@@ -265,7 +265,7 @@ int fs_truncate(const char* path, off_t size, struct fuse_file_info* fi) {
   const uint32_t csz = fh->chunk_sz;
 
   // Helper: build AAD for a chunk index.
-  auto make_aad = [&](uint64_t idx, uint8_t out[enc::AAD_PREFIX_LEN + 8]) {
+  auto make_aad = [&](uint64_t idx, uint8_t (&out)[enc::AAD_PREFIX_LEN + 8]) {
     util::enc::build_aad(out, fh->aad_prefix, idx);
   };
 

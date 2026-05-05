@@ -12,7 +12,7 @@ const fuse_operations* leichfs_ops() noexcept {
 
   // ── Lifecycle ──────────────────────────────────────────────────────────
   op.init    = fs::fs_init;
-  op.destroy = fs::fs_destroy;
+  op.destroy = nullptr; // FSCtx is handled by unique_ptr in main.cpp
 
   // ── Metadata ───────────────────────────────────────────────────────────
   op.getattr  = fs::fs_getattr;

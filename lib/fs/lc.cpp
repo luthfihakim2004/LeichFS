@@ -16,8 +16,7 @@ void* fs_init(struct fuse_conn_info* /*conn*/, struct fuse_config* cfg) {
 }
 
 void fs_destroy(void* data) {
-  // FSCtx owns rootfd via unique_fd — destructor closes it automatically.
-  delete static_cast<FSCtx*>(data);
+  // Don't destroy, destructor handled by unique_ptr
 }
 
 } // namespace fs

@@ -129,5 +129,5 @@ int main(int argc, char* argv[]) {
 
   const fuse_operations* ops = leichfs::leichfs_ops();
   return ::fuse_main(static_cast<int>(fuse_argv.size()) - 1,
-                     fuse_argv.data(), ops, fuse_ctx.release());
+                     fuse_argv.data(), ops, fuse_ctx.get());
 }
