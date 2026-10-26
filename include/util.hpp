@@ -1,9 +1,11 @@
+// util.hpp
 #pragma once
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <dirent.h>
 #include <fcntl.h>
+#include <memory>
 #include <span>
 #include <openssl/crypto.h>
 #include <string>
@@ -11,6 +13,8 @@
 
 #include "enc/params.hpp"
 #include "enc/header.hpp"
+
+namespace fs { struct FH; }
 
 // ────────────────────────────────────────────────────────────────────────────
 // util — RAII wrappers and free functions
@@ -118,6 +122,20 @@ unique_fd validate_root_path(const char* path);
 // util::fs — filesystem helpers
 // ────────────────────────────────────────────────────────────────────────────
 namespace util::fs {
+
+// Build and return a fully initialised FH on the heap, or nullptr on any error
+// (errno / *out_err set to a negative FUSE errno on failure).
+//
+// fd_raw    : already-opened O_RDWR fd; ownership transfers into the returned FH.
+// h         : validated header read from fd_raw.
+// oflags    : the original fi->flags from the FUSE call.
+// init_len  : the plaintext length to initialise shared state with.
+// out_err   : set to a negative errno on failure.
+std::unique_ptr<::fs::FH> make_fh(int         fd_raw,
+                                   const ::enc::Header& h,
+                                   int         oflags,
+                                   uint64_t    init_len,
+                                   int&        out_err);
 
 // Retry-on-EINTR pread/pwrite that treat short results as errors (return < n).
 ssize_t full_pread (int fd, void*       buf, size_t n, off_t offset);

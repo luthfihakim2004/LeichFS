@@ -1,6 +1,8 @@
 build/
+compile_commands.json
 .cache/
 mnt/
 test/
 TODO
 Notes
+Unfinished-example-report.pdf

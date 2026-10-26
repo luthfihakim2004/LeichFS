@@ -17,6 +17,8 @@
 
 #include "enc/header.hpp"
 #include "enc/params.hpp"
+#include "enc/crypto.hpp"
+#include "fs/core.hpp"
 
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -41,6 +43,54 @@ unique_fd validate_root_path(const char* path) {
 // ────────────────────────────────────────────────────────────────────────────
 namespace util::fs {
 
+std::unique_ptr<::fs::FH> make_fh(int         fd_raw,
+                                   const  ::enc::Header& h,
+                                   int         oflags,
+                                   uint64_t    init_len,
+                                   int&        out_err) {
+  auto fh = std::make_unique<::fs::FH>();
+  fh->fd      = util::unique_fd{fd_raw};
+  fh->oflags  = oflags;
+  fh->chunk_sz = h.chunk_sz;
+  fh->wr      = (oflags & O_ACCMODE) != O_RDONLY;
+
+  fh->shared = ::fs::ctx()->registry.acquire(fd_raw, init_len);
+  if (!fh->shared) { out_err = -EIO; return nullptr; }
+
+  // Derive per-file key material from the master key (stored in FSCtx)
+  // and the per-file salt (stored in the on-disk header).
+  // The master key never leaves FSCtx after mount time.
+  if (::enc::derive_file_material(::fs::ctx()->master_key.raw(), h.salt,
+                                fh->file_key.raw(), fh->nonce_base) != 0) {
+    out_err = -EIO;
+    return nullptr;
+  }
+  // master_key stays in FSCtx — never copied, never zeroed here.
+
+  // Initialize reusable EVP contexts — cipher and IV length set once here,
+  // re-keyed on every encrypt/decrypt call without reallocation.
+  fh->enc_ctx.reset(EVP_CIPHER_CTX_new());
+  fh->dec_ctx.reset(EVP_CIPHER_CTX_new());
+  if (!fh->enc_ctx || !fh->dec_ctx) { out_err = -EIO; return nullptr; }
+
+  if (EVP_EncryptInit_ex(fh->enc_ctx.get(), EVP_aes_256_gcm(),
+                         nullptr, nullptr, nullptr) != 1 ||
+      EVP_CIPHER_CTX_ctrl(fh->enc_ctx.get(), EVP_CTRL_GCM_SET_IVLEN,
+                          static_cast<int>(::enc::NONCE_SIZE), nullptr) != 1) {
+    out_err = -EIO; return nullptr;
+  }
+
+  if (EVP_DecryptInit_ex(fh->dec_ctx.get(), EVP_aes_256_gcm(),
+                         nullptr, nullptr, nullptr) != 1 ||
+      EVP_CIPHER_CTX_ctrl(fh->dec_ctx.get(), EVP_CTRL_GCM_SET_IVLEN,
+                          static_cast<int>(::enc::NONCE_SIZE), nullptr) != 1) {
+    out_err = -EIO; return nullptr;
+  }
+
+  util::enc::build_aad_prefix(fh->aad_prefix, h);
+  out_err = 0;
+  return fh;
+}
 // pread() wrapper to guarantee read exactly n bytes 
 ssize_t full_pread(int fd, void* buf, size_t n, off_t offset) {
   auto* p = static_cast<uint8_t*>(buf);

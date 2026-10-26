@@ -21,63 +21,6 @@ namespace fs {
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
-// Build and return a fully initialised FH on the heap, or nullptr on any error
-// (errno / *out_err set to a negative FUSE errno on failure).
-//
-// fd_raw    : already-opened O_RDWR fd; ownership transfers into the returned FH.
-// h         : validated header read from fd_raw.
-// oflags    : the original fi->flags from the FUSE call.
-// init_len  : the plaintext length to initialise shared state with.
-// out_err   : set to a negative errno on failure.
-static std::unique_ptr<FH> make_fh(int         fd_raw,
-                                   const enc::Header& h,
-                                   int         oflags,
-                                   uint64_t    init_len,
-                                   int&        out_err) {
-  auto fh = std::make_unique<FH>();
-  fh->fd      = util::unique_fd{fd_raw};
-  fh->oflags  = oflags;
-  fh->chunk_sz = h.chunk_sz;
-  fh->wr      = (oflags & O_ACCMODE) != O_RDONLY;
-
-  fh->shared = fs::ctx()->registry.acquire(fd_raw, init_len);
-  if (!fh->shared) { out_err = -EIO; return nullptr; }
-
-  // Derive per-file key material from the master key (stored in FSCtx)
-  // and the per-file salt (stored in the on-disk header).
-  // The master key never leaves FSCtx after mount time.
-  if (enc::derive_file_material(fs::ctx()->master_key.raw(), h.salt,
-                                fh->file_key.raw(), fh->nonce_base) != 0) {
-    out_err = -EIO;
-    return nullptr;
-  }
-  // master_key stays in FSCtx — never copied, never zeroed here.
-
-  // Initialize reusable EVP contexts — cipher and IV length set once here,
-  // re-keyed on every encrypt/decrypt call without reallocation.
-  fh->enc_ctx.reset(EVP_CIPHER_CTX_new());
-  fh->dec_ctx.reset(EVP_CIPHER_CTX_new());
-  if (!fh->enc_ctx || !fh->dec_ctx) { out_err = -EIO; return nullptr; }
-
-  if (EVP_EncryptInit_ex(fh->enc_ctx.get(), EVP_aes_256_gcm(),
-                         nullptr, nullptr, nullptr) != 1 ||
-      EVP_CIPHER_CTX_ctrl(fh->enc_ctx.get(), EVP_CTRL_GCM_SET_IVLEN,
-                          static_cast<int>(enc::NONCE_SIZE), nullptr) != 1) {
-    out_err = -EIO; return nullptr;
-  }
-
-  if (EVP_DecryptInit_ex(fh->dec_ctx.get(), EVP_aes_256_gcm(),
-                         nullptr, nullptr, nullptr) != 1 ||
-      EVP_CIPHER_CTX_ctrl(fh->dec_ctx.get(), EVP_CTRL_GCM_SET_IVLEN,
-                          static_cast<int>(enc::NONCE_SIZE), nullptr) != 1) {
-    out_err = -EIO; return nullptr;
-  }
-
-  util::enc::build_aad_prefix(fh->aad_prefix, h);
-  out_err = 0;
-  return fh;
-}
-
 // Build the full 40-byte AAD for chunk_idx and store it in aad_out[].
 static inline void make_aad(const FH& fh, uint64_t chunk_idx,
                              uint8_t (&aad_out)[enc::AAD_PREFIX_LEN + 8]) {
@@ -118,7 +61,7 @@ int fs_create(const char* path, mode_t mode, struct fuse_file_info* fi) {
   if (enc::write_header(fd.get(), h) != 0) return -EIO;
 
   int err = 0;
-  auto fh = make_fh(fd.get(), h, fi->flags, /*init_len=*/0, err);
+  auto fh = util::fs::make_fh(fd.get(), h, fi->flags, /*init_len=*/0, err);
   if (!fh) return err;
 
   (void)fd.release();  // ownership transferred into fh->fd
@@ -165,7 +108,7 @@ int fs_open(const char* path, struct fuse_file_info* fi) {
   const uint64_t ondisk_len = util::enc::be64toh_u64(h.plain_len_be);
 
   int err = 0;
-  auto fh = make_fh(fd.get(), h, fi->flags, ondisk_len, err);
+  auto fh = util::fs::make_fh(fd.get(), h, fi->flags, ondisk_len, err);
   if (!fh) return err;
 
   // Apply O_TRUNC: zero the logical length and punch off ciphertext.
