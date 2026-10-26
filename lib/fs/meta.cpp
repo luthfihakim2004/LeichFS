@@ -1,8 +1,11 @@
+#include <algorithm>
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
+#include <iterator>
 #include <limits.h>
 #include <memory>
 #include <sys/stat.h>
@@ -228,30 +231,25 @@ int fs_truncate(const char* path, off_t size, struct fuse_file_info* fi) {
     if (int rc = util::fs::walk_parent(ctx()->rootfd.get(), path, pp); rc != 0)
       return rc;
 
+    // Force O_RDWR so make_fh can write
+    int oflags = O_RDWR | O_CLOEXEC | O_NOFOLLOW;
     util::unique_fd fd{::openat(pp.dirfd.get(),
                                 pp.leaf.empty() ? "." : pp.leaf.c_str(),
-                                O_RDWR | O_CLOEXEC | O_NOFOLLOW)};
+                                oflags)};
     if (!fd) return -errno;
 
     enc::Header h{};
     if (enc::read_header(fd.get(), h) != 0) return -EINVAL;
 
-    temp_fh = std::make_unique<FH>();
-    temp_fh->fd       = std::move(fd);
-    temp_fh->chunk_sz = h.chunk_sz;
-
-    // Derive crypto material.
-    if (enc::derive_file_material(fs::ctx()->master_key.raw(), h.salt,
-                                  temp_fh->file_key.raw(),
-                                  temp_fh->nonce_base) != 0)    return -EIO;
-
-    util::enc::build_aad_prefix(temp_fh->aad_prefix, h);
-
     // Shared state: use the on-disk length as the initial value.
     const uint64_t ondisk_len = util::enc::be64toh_u64(h.plain_len_be);
-    temp_fh->shared = fs::ctx()->registry.acquire(temp_fh->fd.get(), ondisk_len);
-    if (!temp_fh->shared) return -EIO;
 
+    int err = 0;
+    // Menggunakan fs::make_fh (bukan util::fs) setelah keyword static dihapus di io.cpp
+    temp_fh = util::fs::make_fh(fd.get(), h, oflags, ondisk_len, err);
+    if (!temp_fh) return err;
+
+    (void)fd.release();
     fh = temp_fh.get();
   }
 
@@ -282,7 +280,6 @@ int fs_truncate(const char* path, off_t size, struct fuse_file_info* fi) {
             static_cast<ssize_t>(clen))
       return -EIO;
 
-    pbuf.resize(ex_len);
     uint8_t aad[enc::AAD_PREFIX_LEN + 8];
     make_aad(idx, aad);
 
@@ -375,16 +372,19 @@ int fs_truncate(const char* path, off_t size, struct fuse_file_info* fi) {
 
       std::vector<uint8_t> pbuf(csz, 0);
       if (ex_len > 0) {
-        std::vector<uint8_t> existing;
-        if (int rc = read_chunk(idx, ex_len, existing); rc != 0)
-          return rc == -1 ? -EIO : -EBADMSG;
-        std::memcpy(pbuf.data(), existing.data(), ex_len);
+        int rc_read = read_chunk(idx, ex_len, pbuf);
+        if (rc_read != 0){
+            return -EBADMSG;
+        }
       }
-      // New bytes are already zero.
 
       const size_t out_len = std::max(ex_len, off_in + fill_bytes);
-      if (int rc = write_chunk(idx, pbuf, out_len); rc != 0)
-        return rc;
+
+      int rc_write = write_chunk(idx, pbuf, out_len);
+      if (rc_write != 0){
+          return -EIO;
+      }
+      // New bytes are already zero.
 
       pos += fill_bytes;
     }

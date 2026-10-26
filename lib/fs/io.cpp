@@ -61,7 +61,7 @@ int fs_create(const char* path, mode_t mode, struct fuse_file_info* fi) {
   if (enc::write_header(fd.get(), h) != 0) return -EIO;
 
   int err = 0;
-  auto fh = util::fs::make_fh(fd.get(), h, fi->flags, /*init_len=*/0, err);
+  auto fh = util::fs::make_fh(fd.get(), h, oflags, /*init_len=*/0, err);
   if (!fh) return err;
 
   (void)fd.release();  // ownership transferred into fh->fd

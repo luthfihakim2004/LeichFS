@@ -79,7 +79,7 @@ int aesgcm_encrypt(
 
   int outl = 0, tmplen = 0;
 
-  if (EVP_EncryptInit_ex(c, nullptr, nullptr, key, nonce) != 1)  return -1;
+  if (EVP_EncryptInit_ex(c, EVP_aes_256_gcm(), nullptr, key, nonce) != 1)  return -1;
 
   if (aad_len > 0 &&
       EVP_EncryptUpdate(c, nullptr, &tmplen,
@@ -105,7 +105,7 @@ int aesgcm_decrypt(
 
   int outl = 0, tmplen = 0;
 
-  if (EVP_DecryptInit_ex(c, nullptr, nullptr, key, nonce) != 1)  return -1;
+  if (EVP_DecryptInit_ex(c, EVP_aes_256_gcm(), nullptr, key, nonce) != 1)  return -1;
 
   if (aad_len > 0 &&
       EVP_DecryptUpdate(c, nullptr, &tmplen,

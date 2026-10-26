@@ -6,3 +6,5 @@ test/
 TODO
 Notes
 Unfinished-example-report.pdf
+test.patch
+__pycache__/
