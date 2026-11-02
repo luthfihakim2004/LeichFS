@@ -1,5 +1,6 @@
 #include "util.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cerrno>
 #include <cstddef>
@@ -42,6 +43,56 @@ unique_fd validate_root_path(const char* path) {
 // util::fs
 // ────────────────────────────────────────────────────────────────────────────
 namespace util::fs {
+
+int read_chunk(::fs::FH &fh, uint64_t idx, size_t ex_len, std::vector<uint8_t> &pbuf){
+    if(pbuf.size() > ex_len) pbuf.resize(ex_len);
+
+    const size_t clen = ::enc::NONCE_SIZE + ex_len + ::enc::TAG_SIZE;
+    std::vector<uint8_t> cbuf(clen);
+    if(full_pread(fh.fd.get(), cbuf.data(), clen,
+                static_cast<off_t>(cipher_chunk_off(idx, fh.chunk_sz))) != static_cast<ssize_t>(clen))
+        return -EIO;
+    uint8_t aad[::enc::AAD_PREFIX_LEN + 8];
+    enc::build_aad(aad, fh.aad_prefix, idx);
+    return ::enc::aesgcm_decrypt(fh.dec_ctx.get(), fh.file_key.data(), cbuf.data(),
+            cbuf.data() + ::enc::NONCE_SIZE, ex_len, aad, sizeof(aad),
+            cbuf.data() + ::enc::NONCE_SIZE + ex_len, pbuf.data()) == 0
+        ? 0 : -EBADMSG;
+}
+
+int write_chunk(::fs::FH &fh, uint64_t idx, const std::vector<uint8_t> &pbuf, size_t plain_len){
+    const size_t wlen = ::enc::NONCE_SIZE + plain_len + ::enc::TAG_SIZE;
+    std::vector<uint8_t> cbuf(wlen);
+    if(enc::build_nonce(cbuf.data(), idx) != 0) return -EIO;
+    uint8_t aad[::enc::AAD_PREFIX_LEN + 8];
+    enc::build_aad(aad, fh.aad_prefix, idx);
+    if(::enc::aesgcm_encrypt(fh.enc_ctx.get(), fh.file_key.data(), cbuf.data(), 
+                pbuf.data(), plain_len, aad, sizeof(aad),
+                cbuf.data() + ::enc::NONCE_SIZE,
+                cbuf.data() + ::enc::NONCE_SIZE + plain_len) != 0)
+        return -EIO;
+    if(full_pwrite(fh.fd.get(), cbuf.data(), wlen, static_cast<off_t>(cipher_chunk_off(idx, fh.chunk_sz))) != static_cast<ssize_t>(wlen))
+        return -EIO;
+    return 0;
+}
+
+int grow_zero(::fs::FH &fh, uint64_t old_len, uint64_t new_len){
+    const uint32_t csz = fh.chunk_sz;
+    for(uint64_t pos = old_len; pos < new_len;){
+        const uint64_t idx      = chunk_index(pos, csz);
+        const size_t off_in     = chunk_off(pos, csz);
+        const size_t fill       = static_cast<size_t>(std::min<uint64_t>(csz - off_in, new_len - pos));
+        const uint64_t ch_start = pos - off_in;
+        const size_t ex_len     = ch_start < old_len ?
+            static_cast<size_t>(std::min<uint64_t>(csz, old_len - ch_start)) : 0;
+        std::vector<uint8_t> pbuf(csz, 0);
+        if(ex_len > 0)
+            if(int rc = read_chunk(fh, idx, ex_len, pbuf); rc != 0) return rc;
+        if(int rc = write_chunk(fh, idx, pbuf, std::max(ex_len, off_in + fill)); rc != 0) return rc;
+        pos += fill;
+    }
+    return 0;
+}
 
 std::unique_ptr<::fs::FH> make_fh(int         fd_raw,
                                    const  ::enc::Header& h,

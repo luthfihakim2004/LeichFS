@@ -262,66 +262,6 @@ int fs_truncate(const char* path, off_t size, struct fuse_file_info* fi) {
 
   const uint32_t csz = fh->chunk_sz;
 
-  // Helper: build AAD for a chunk index.
-  auto make_aad = [&](uint64_t idx, uint8_t (&out)[enc::AAD_PREFIX_LEN + 8]) {
-    util::enc::build_aad(out, fh->aad_prefix, idx);
-  };
-
-  // Helper: read + decrypt one chunk from disk.
-  // Returns the plaintext in pbuf (resized to ex_len).  Returns -EIO / -EBADMSG.
-  auto read_chunk = [&](uint64_t idx, size_t ex_len,
-                        std::vector<uint8_t>& pbuf) -> int {
-    const uint64_t coffset = util::fs::cipher_chunk_off(idx, csz);
-    const size_t   clen    = enc::NONCE_SIZE + ex_len + enc::TAG_SIZE;
-    std::vector<uint8_t> cbuf(clen);
-
-    if (util::fs::full_pread(fh->fd.get(), cbuf.data(), clen,
-                             static_cast<off_t>(coffset)) !=
-            static_cast<ssize_t>(clen))
-      return -EIO;
-
-    uint8_t aad[enc::AAD_PREFIX_LEN + 8];
-    make_aad(idx, aad);
-
-    return enc::aesgcm_decrypt(fh->dec_ctx.get(),
-                               fh->file_key.data(),
-                               cbuf.data(),
-                               cbuf.data() + enc::NONCE_SIZE, ex_len,
-                               aad, sizeof(aad),
-                               cbuf.data() + enc::NONCE_SIZE + ex_len,
-                               pbuf.data());
-  };
-
-  // Helper: encrypt pbuf (plain_len bytes) and write chunk idx back to disk.
-  auto write_chunk = [&](uint64_t idx,
-                         const std::vector<uint8_t>& pbuf,
-                         size_t plain_len) -> int {
-    const size_t         wlen = enc::NONCE_SIZE + plain_len + enc::TAG_SIZE;
-    std::vector<uint8_t> cbuf(wlen);
-    if (util::enc::build_nonce(cbuf.data(), idx) != 0)
-      return -EIO;
-
-    uint8_t aad[enc::AAD_PREFIX_LEN + 8];
-    make_aad(idx, aad);
-
-    if (enc::aesgcm_encrypt(fh->enc_ctx.get(),
-                            fh->file_key.data(),
-                            cbuf.data(),
-                            pbuf.data(), plain_len,
-                            aad, sizeof(aad),
-                            cbuf.data() + enc::NONCE_SIZE,
-                            cbuf.data() + enc::NONCE_SIZE + plain_len) != 0)
-      return -EIO;
-
-    const uint64_t coffset = util::fs::cipher_chunk_off(idx, csz);
-    if (util::fs::full_pwrite(fh->fd.get(), cbuf.data(), wlen,
-                              static_cast<off_t>(coffset)) !=
-            static_cast<ssize_t>(wlen))
-      return -EIO;
-    
-    return 0;
-  };
-
   // ── SHRINK ────────────────────────────────────────────────────────────
   if (new_len < old_len) {
     const uint64_t last_chunk = new_len / csz;
@@ -334,17 +274,11 @@ int fs_truncate(const char* path, off_t size, struct fuse_file_info* fi) {
           ? static_cast<size_t>(std::min<uint64_t>(csz, old_len - ch_start))
           : 0;
 
-      std::vector<uint8_t> pbuf;
-      if (ex_len > 0) {
-        if (int rc = read_chunk(last_chunk, ex_len, pbuf); rc != 0)
-          return rc == -1 ? -EIO : -EBADMSG;
-      } else {
-        pbuf.assign(tail_len, 0);
-      }
-      pbuf.resize(tail_len); // truncate to new size
-
-      if (int rc = write_chunk(last_chunk, pbuf, tail_len); rc != 0)
-        return rc;
+      std::vector<uint8_t> pbuf(ex_len);
+      if (ex_len > 0) 
+          if (int rc = util::fs::read_chunk(*fh, last_chunk, ex_len, pbuf); rc != 0) return rc;
+      pbuf.resize(tail_len);
+      if (int rc = util::fs::write_chunk(*fh, last_chunk, pbuf, tail_len); rc != 0) return rc;
 
       const uint64_t cut = util::fs::cipher_tail_off(last_chunk, tail_len, csz);
       if (::ftruncate(fh->fd.get(), static_cast<off_t>(cut)) == -1)
@@ -358,36 +292,7 @@ int fs_truncate(const char* path, off_t size, struct fuse_file_info* fi) {
 
   // ── GROW ──────────────────────────────────────────────────────────────
   } else {
-    uint64_t pos = old_len;
-    while (pos < new_len) {
-      const uint64_t idx        = util::fs::chunk_index(pos, csz);
-      const size_t   off_in     = util::fs::chunk_off(pos, csz);
-      const size_t   fill_bytes = static_cast<size_t>(
-          std::min<uint64_t>(csz - off_in, new_len - pos));
-
-      const uint64_t ch_start = pos - off_in;
-      const size_t   ex_len   = ch_start < old_len
-          ? static_cast<size_t>(std::min<uint64_t>(csz, old_len - ch_start))
-          : 0;
-
-      std::vector<uint8_t> pbuf(csz, 0);
-      if (ex_len > 0) {
-        int rc_read = read_chunk(idx, ex_len, pbuf);
-        if (rc_read != 0){
-            return -EBADMSG;
-        }
-      }
-
-      const size_t out_len = std::max(ex_len, off_in + fill_bytes);
-
-      int rc_write = write_chunk(idx, pbuf, out_len);
-      if (rc_write != 0){
-          return -EIO;
-      }
-      // New bytes are already zero.
-
-      pos += fill_bytes;
-    }
+      if (int rc = util::fs::grow_zero(*fh, old_len, new_len); rc != 0) return rc;
   }
 
   // ── Commit new logical length ─────────────────────────────────────────

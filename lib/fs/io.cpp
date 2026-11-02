@@ -198,7 +198,7 @@ int fs_write(const char* /*path*/, const char* buf, size_t size, off_t offset,
   if (!fh || !fh->wr) return -EBADF;
 
   std::unique_lock lk(fh->shared->mtx_);
-  const uint64_t cur_len = fh->shared->plain_len_unlocked();
+  uint64_t cur_len = fh->shared->plain_len_unlocked();
 
   // O_APPEND: always write at the current end.
   const uint64_t start_off = (fh->oflags & O_APPEND)
@@ -207,6 +207,14 @@ int fs_write(const char* /*path*/, const char* buf, size_t size, off_t offset,
 
   if (size > std::numeric_limits<uint64_t>::max() - start_off)
     return -EFBIG;
+  
+  if (size == 0) return 0;
+  if (start_off > cur_len){
+      if (int rc = util::fs::grow_zero(*fh, cur_len, start_off); rc != 0) return rc;
+      fh->shared->set_plain_len_unlocked(start_off);
+      if (util::fs::update_plain_len(fh->fd.get(), start_off) != 0) return -EIO;
+      cur_len = start_off;
+  }
 
   const auto*    in  = reinterpret_cast<const uint8_t*>(buf);
   const uint32_t csz = fh->chunk_sz;

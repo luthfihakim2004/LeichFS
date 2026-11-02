@@ -10,6 +10,7 @@
 #include <openssl/crypto.h>
 #include <string>
 #include <unistd.h>
+#include <vector>
 
 #include "enc/params.hpp"
 #include "enc/header.hpp"
@@ -122,6 +123,10 @@ unique_fd validate_root_path(const char* path);
 // util::fs — filesystem helpers
 // ────────────────────────────────────────────────────────────────────────────
 namespace util::fs {
+
+int read_chunk(::fs::FH& fh, uint64_t idx, size_t ex_len, std::vector<uint8_t>& pbuf);
+int write_chunk(::fs::FH& fh, uint64_t idx, const std::vector<uint8_t>& pbuf, size_t plain_len);
+int grow_zero(::fs::FH& fh, uint64_t old_len, uint64_t new_len);
 
 // Build and return a fully initialised FH on the heap, or nullptr on any error
 // (errno / *out_err set to a negative FUSE errno on failure).
