@@ -193,7 +193,7 @@ uint64_t cipher_tail_off(uint64_t chunk_idx, size_t plain_tail, size_t chunk_sz)
        + static_cast<uint64_t>(::enc::NONCE_SIZE + plain_tail + ::enc::TAG_SIZE);
 }
 
-// For updating plain_len inside header safely and improve durability with fdatasync()
+// No longer calls fdatasync, too expensive!
 int update_plain_len(int fd, uint64_t new_plain_len_host) {
   static_assert(::enc::HEADER_SIZE == 64,                          "Header size unexpected");
   static_assert(offsetof(::enc::Header, plain_len_be) == 56,       "plain_len offset mismatch");
@@ -202,10 +202,6 @@ int update_plain_len(int fd, uint64_t new_plain_len_host) {
   const uint64_t be  = util::enc::htobe_u64(new_plain_len_host);
 
   if (full_pwrite(fd, &be, sizeof(be), off) != static_cast<ssize_t>(sizeof(be)))
-    return -1;
-
-  // May be expensive for write-heavy workloads
-  if (::fdatasync(fd) == -1)
     return -1;
 
   return 0;
