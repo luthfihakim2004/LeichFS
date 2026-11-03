@@ -34,6 +34,11 @@ __While creating a backup, you might want to unmount the filesystem first to avo
 - OpenSSL 3.0+
 - libargon2
 
+## Plans
+
+- Implement dirty chunk cache to compensate `write` overhead
+- Parallelize encryption using a thread pool for larger data blocks
+
 ## License
 
 See [LICENSE](LICENSE)
