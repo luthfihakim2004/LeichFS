@@ -1,13 +1,18 @@
+#include <algorithm>
 #include <cerrno>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <fcntl.h>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <shared_mutex>
 #include <sys/types.h>
+#include <unistd.h>
 #include <vector>
 
 #include "enc/crypto.hpp"
@@ -224,6 +229,12 @@ int fs_write(const char* /*path*/, const char* buf, size_t size, off_t offset,
   uint64_t chunk_idx  = util::fs::chunk_index(cur_offset, csz);
   size_t   chunk_off_ = util::fs::chunk_off(cur_offset, csz);
 
+  static thread_local std::vector<uint8_t> pbuf, cbuf;
+  if (pbuf.size() < csz) pbuf.resize(csz);
+  struct Scrub { ~Scrub() { OPENSSL_cleanse(pbuf.data(), pbuf.size()); } } scrub;
+  const size_t cmax = enc::NONCE_SIZE + csz + enc::TAG_SIZE;
+  if (cbuf.size() < cmax) cbuf.resize(cmax);
+
   while (remaining > 0) {
     const uint64_t chunk_start = cur_offset - chunk_off_;
     const bool     exists      = chunk_start < cur_len;
@@ -231,61 +242,38 @@ int fs_write(const char* /*path*/, const char* buf, size_t size, off_t offset,
         ? static_cast<size_t>(std::min<uint64_t>(csz, cur_len - chunk_start))
         : 0;
 
-    // Build plaintext buffer for this chunk (zero-initialised for grow).
-    std::vector<uint8_t> pbuf(std::max(ex_len, static_cast<size_t>(csz)), 0);
+    const size_t can = std::min<size_t>(remaining, csz - chunk_off_);
 
-    // Read-modify: decrypt existing chunk content if present.
-    if (ex_len > 0) {
-      const uint64_t coffset = util::fs::cipher_chunk_off(chunk_idx, csz);
-      const size_t   clen    = enc::NONCE_SIZE + ex_len + enc::TAG_SIZE;
-      std::vector<uint8_t> cbuf(clen);
+    const bool replaces_all = (chunk_off_ == 0 && can >= ex_len);
 
-      if (util::fs::full_pread(fh->fd.get(), cbuf.data(), clen,
-                               static_cast<off_t>(coffset)) !=
-              static_cast<ssize_t>(clen))
-        return -EIO;
+    if (ex_len > 0 && !replaces_all){
+        const size_t clen = enc::NONCE_SIZE + ex_len + enc::TAG_SIZE;
 
-      uint8_t aad[enc::AAD_PREFIX_LEN + 8];
-      make_aad(*fh, chunk_idx, aad);
+        if (util::fs::full_pread(fh->fd.get(), cbuf.data(), clen,
+                    static_cast<off_t>(util::fs::cipher_chunk_off(chunk_idx, csz))) != static_cast<ssize_t>(clen))
+            return -EIO;
 
-      if (enc::aesgcm_decrypt(fh->dec_ctx.get(),
-                              fh->file_key.data(),
-                              cbuf.data(),
-                              cbuf.data() + enc::NONCE_SIZE, ex_len,
-                              aad, sizeof(aad),
-                              cbuf.data() + enc::NONCE_SIZE + ex_len,
-                              pbuf.data()) != 0)
-        return -EBADMSG;
+        uint8_t aad[enc::AAD_PREFIX_LEN + 8];
+        make_aad(*fh, chunk_idx, aad);
+        if (enc::aesgcm_decrypt(fh->dec_ctx.get(), fh->file_key.data(), cbuf.data(), 
+                    cbuf.data() + enc::NONCE_SIZE, ex_len, aad, sizeof(aad),
+                    cbuf.data() + enc::NONCE_SIZE + ex_len, pbuf.data()) != 0)
+            return -EBADMSG;
     }
 
-    // Overlay new data.
-    const size_t can = std::min(remaining, csz - chunk_off_);
     std::memcpy(pbuf.data() + chunk_off_, in, can);
     const size_t out_plen = std::max(ex_len, chunk_off_ + can);
+    const size_t wlen = enc::NONCE_SIZE + out_plen + enc::TAG_SIZE;
 
-    // Encrypt with a nonce: random[8] || be32(chunk_idx).
-    const size_t             wlen = enc::NONCE_SIZE + out_plen + enc::TAG_SIZE;
-    std::vector<uint8_t>     cbuf(wlen);
-    if (util::enc::build_nonce(cbuf.data(), chunk_idx) != 0)
-      return -EIO;
-
+    if (util::enc::build_nonce(cbuf.data(), chunk_idx) != 0) return -EIO;
     uint8_t aad[enc::AAD_PREFIX_LEN + 8];
     make_aad(*fh, chunk_idx, aad);
+    if (enc::aesgcm_encrypt(fh->enc_ctx.get(), fh->file_key.data(), cbuf.data(), 
+                pbuf.data(), out_plen, aad, sizeof(aad),
+                cbuf.data() + enc::NONCE_SIZE, cbuf.data() + enc::NONCE_SIZE + out_plen  ) != 0)
+        return -EIO;
 
-    if (enc::aesgcm_encrypt(fh->enc_ctx.get(),
-                            fh->file_key.data(),
-                            cbuf.data(),                      // nonce
-                            pbuf.data(), out_plen,
-                            aad, sizeof(aad),
-                            cbuf.data() + enc::NONCE_SIZE,    // ct
-                            cbuf.data() + enc::NONCE_SIZE + out_plen) != 0) // tag
-      return -EIO;
-
-    const uint64_t coffset = util::fs::cipher_chunk_off(chunk_idx, csz);
-    if (util::fs::full_pwrite(fh->fd.get(), cbuf.data(), wlen,
-                              static_cast<off_t>(coffset)) !=
-            static_cast<ssize_t>(wlen))
-      return -EIO;
+    if (util::fs::full_pwrite(fh->fd.get(), cbuf.data(), wlen, static_cast<off_t>(util::fs::cipher_chunk_off(chunk_idx, csz))) != static_cast<ssize_t>(wlen)) return -EIO;
 
     in          += can;
     remaining   -= can;
@@ -318,10 +306,11 @@ int fs_release(const char* /*path*/, struct fuse_file_info* fi) {
   return 0;
 }
 
-int fs_fsync(const char* /*path*/, int /*datasync*/, struct fuse_file_info* fi) {
+int fs_fsync(const char* /*path*/, int datasync, struct fuse_file_info* fi) {
+  if (!fi || !fi->fh) return -EBADF;
   auto* fh = reinterpret_cast<FH*>(fi->fh);
-  if (!fh) return -EBADF;
-  return (::fsync(fh->fd.get()) == -1) ? -errno : 0;
+  const int rc = datasync ? ::fdatasync(fh->fd.get()) : ::fsync(fh->fd.get());
+  return rc == -1 ? -errno : 0;
 }
 
 off_t fs_lseek(const char* /*path*/, off_t off, int whence,
