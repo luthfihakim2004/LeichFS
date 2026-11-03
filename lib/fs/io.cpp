@@ -119,9 +119,14 @@ int fs_open(const char* path, struct fuse_file_info* fi) {
   // Apply O_TRUNC: zero the logical length and punch off ciphertext.
   if (fh->wr && (fi->flags & O_TRUNC)) {
     std::unique_lock lk(fh->shared->mtx_);
+
+    if (::ftruncate(fd.get(), static_cast<off_t>(enc::HEADER_SIZE)) == -1)
+        return -errno;
+
+    if (int rc = util::fs::update_plain_len(fd.get(), 0); rc != 0)
+        return rc;
+
     fh->shared->set_plain_len_unlocked(0);
-    util::fs::update_plain_len(fd.get(), 0);
-    ::ftruncate(fd.get(), static_cast<off_t>(enc::HEADER_SIZE));
   }
 
   (void)fd.release();

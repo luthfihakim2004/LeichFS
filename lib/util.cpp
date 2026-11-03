@@ -168,7 +168,7 @@ ssize_t full_pwrite(int fd, const void* buf, size_t n, off_t offset) {
       if (errno == EINTR) continue;
       return -1;
     }
-    if (w == 0) break;
+    if (w == 0) return static_cast<ssize_t>(done);
     done += static_cast<size_t>(w);
   }
   return static_cast<ssize_t>(done);
@@ -201,8 +201,13 @@ int update_plain_len(int fd, uint64_t new_plain_len_host) {
   const off_t    off = static_cast<off_t>(offsetof(::enc::Header, plain_len_be));
   const uint64_t be  = util::enc::htobe_u64(new_plain_len_host);
 
-  if (full_pwrite(fd, &be, sizeof(be), off) != static_cast<ssize_t>(sizeof(be)))
-    return -1;
+  const ssize_t n = full_pwrite(fd, &be, sizeof(be), off);
+
+  if (n < 0)
+    return -errno;
+
+  if (n != static_cast<ssize_t>(sizeof(be)))
+      return -EIO;
 
   return 0;
 }
