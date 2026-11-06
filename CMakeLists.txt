@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.21)
 project(leichfs LANGUAGES CXX)
 
+include(CTest)
+
 set(CMAKE_CXX_STANDARD          20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS        OFF)
@@ -70,6 +72,27 @@ target_compile_options(leichfs PRIVATE
 target_link_options(leichfs PRIVATE
     $<$<CONFIG:Debug>:-fsanitize=address,undefined>
 )
+
+# ── Cryptographic tests ──────────────────────────────────────────────────────
+if(BUILD_TESTING)
+    add_executable(crypto_tamper_test
+        tests/crypto_tamper_test.cpp
+        lib/enc/crypto.cpp
+    )
+
+    target_include_directories(crypto_tamper_test PRIVATE ${LEICHFS_INCLUDE})
+    target_link_libraries(crypto_tamper_test PRIVATE PkgConfig::OPENSSL)
+
+    target_compile_options(crypto_tamper_test PRIVATE
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Wconversion
+        -Wshadow
+    )
+
+    add_test(NAME crypto_tamper_detection COMMAND crypto_tamper_test)
+endif()
 
 # ── Install ───────────────────────────────────────────────────────────────────
 include(GNUInstallDirs)

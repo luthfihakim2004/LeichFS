@@ -3,8 +3,12 @@ compile_commands.json
 .cache/
 mnt/
 test/
+tests/
+test-suite/
+Documentation/TAMPER_TEST.md
 TODO
 Notes
 Unfinished-example-report.pdf
 test.patch
 __pycache__/
+Documentation/personal/*
