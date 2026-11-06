@@ -32,6 +32,17 @@ static inline void make_aad(const FH& fh, uint64_t chunk_idx,
   util::enc::build_aad(aad_out, fh.aad_prefix, chunk_idx);
 }
 
+static enc::UniqueEvpCipherCtx& tls_dec_ctx(){
+    static thread_local enc::UniqueEvpCipherCtx ctx = []{
+        enc::UniqueEvpCipherCtx c{EVP_CIPHER_CTX_new()};
+        if (c && (EVP_DecryptInit_ex(c.get(), EVP_aes_256_gcm(), nullptr, nullptr, nullptr) != 1 ||
+                    EVP_CIPHER_CTX_ctrl(c.get(), EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(enc::NONCE_SIZE), nullptr) != 1))
+            c.reset();
+        return c;
+    }();
+    return ctx;
+}
+
 
 // ── fs_create ────────────────────────────────────────────────────────────────
 
@@ -157,41 +168,46 @@ int fs_read(const char* /*path*/, char* buf, size_t size, off_t offset,
   uint64_t       chunk_idx = util::fs::chunk_index(off, csz);
   const size_t   first_off = util::fs::chunk_off(off, csz);
 
+  auto& dctx = tls_dec_ctx();
+  if (!dctx) return -EIO;
+
+  static thread_local std::vector<uint8_t> cbuf, pbuf;
+  const size_t cmax = enc::NONCE_SIZE + csz + enc::TAG_SIZE;
+  if (cbuf.size() < cmax) cbuf.resize(cmax);
+  if (pbuf.size() < csz) pbuf.resize(csz);
+  bool used_buf = false;
+  struct Scrub { bool& u; ~Scrub() { if (u) OPENSSL_cleanse(pbuf.data(), pbuf.size()); } } scrub{used_buf};
+
   while (done < to_read) {
     const uint64_t chunk_start = chunk_idx * static_cast<uint64_t>(csz);
     const size_t   plain_len   = static_cast<size_t>(
             std::min<uint64_t>(csz, limit - chunk_start));
+    const size_t src_off = (done == 0) ? first_off: 0;
+    const size_t want = std::min(plain_len - src_off, to_read - done);
+    const size_t clen = enc::NONCE_SIZE + plain_len + enc::TAG_SIZE;
 
-    const uint64_t coff = util::fs::cipher_chunk_off(chunk_idx, csz);
-    const size_t   clen = enc::NONCE_SIZE + plain_len + enc::TAG_SIZE;
-
-    std::vector<uint8_t> cbuf(clen);
-    if (util::fs::full_pread(fh->fd.get(), cbuf.data(), clen,
-                             static_cast<off_t>(coff)) !=
-            static_cast<ssize_t>(clen))
-      return -EIO;
+    if (util::fs::full_pread(fh->fd.get(), cbuf.data(), clen, 
+                static_cast<off_t>(util::fs::cipher_chunk_off(chunk_idx, csz))) != static_cast<ssize_t>(clen))
+        return -EIO;
 
     uint8_t aad[enc::AAD_PREFIX_LEN + 8];
     make_aad(*fh, chunk_idx, aad);
 
-    std::vector<uint8_t> pbuf(plain_len);
-    {
-      std::lock_guard dec_lk(fh->dec_mtx);
-      if (enc::aesgcm_decrypt(
-              fh->dec_ctx.get(),
-              fh->file_key.data(),
-              cbuf.data(),                              // nonce
-              cbuf.data() + enc::NONCE_SIZE, plain_len, // ct
-              aad, sizeof(aad),
-              cbuf.data() + enc::NONCE_SIZE + plain_len, // tag
-              pbuf.data()) != 0)
-        return -EBADMSG;
+    const bool whole = (src_off == 0 && want == plain_len);
+    uint8_t* dst = whole ? out + done : pbuf.data();
+    if (enc::aesgcm_decrypt(
+          dctx.get(),
+          fh->file_key.data(),
+          cbuf.data(),                              // nonce
+          cbuf.data() + enc::NONCE_SIZE, plain_len, // ct
+          aad, sizeof(aad),
+          cbuf.data() + enc::NONCE_SIZE + plain_len, // tag
+          dst) != 0){ OPENSSL_cleanse(dst, plain_len); return -EBADMSG; }
+    if (!whole) {
+        used_buf = true;
+        std::memcpy(out + done, pbuf.data() + src_off, want);
     }
-
-    const size_t src_off = (chunk_idx == util::fs::chunk_index(off, csz))
-                         ? first_off : 0;
-    const size_t want    = std::min(plain_len - src_off, to_read - done);
-    std::memcpy(out + done, pbuf.data() + src_off, want);
+    
     done += want;
     ++chunk_idx;
   }

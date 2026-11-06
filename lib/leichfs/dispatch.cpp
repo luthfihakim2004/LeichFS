@@ -32,7 +32,7 @@ const fuse_operations* leichfs_ops() noexcept {
 
   // ── Extended attributes ────────────────────────────────────────────────
   op.setxattr    = fs::fs_setxattr;
-  op.getxattr    = fs::fs_getxattr;
+  //op.getxattr    = fs::fs_getxattr;
   op.listxattr   = fs::fs_listxattr;
   op.removexattr = fs::fs_removexattr;
 
