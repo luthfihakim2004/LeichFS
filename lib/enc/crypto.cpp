@@ -49,21 +49,22 @@ int hkdf_derive(const uint8_t* key,   size_t key_len,
 int derive_file_material(
         const std::array<uint8_t, KEY_SIZE>& master_key,
         const uint8_t                        salt[SALT_SIZE],
-        std::array<uint8_t, KEY_SIZE>&       file_key,
-        std::array<uint8_t, NONCE_SIZE>&     nonce_base) {
+        std::array<uint8_t, KEY_SIZE>&       file_key
+        //std::array<uint8_t, NONCE_SIZE>&     nonce_base
+        ) {
 
   static constexpr char INFO_KEY  [] = "leichfs-file-key";
-  static constexpr char INFO_NONCE[] = "leichfs-nonce-base";
+  //static constexpr char INFO_NONCE[] = "leichfs-nonce-base";
 
   if (hkdf_derive(master_key.data(), KEY_SIZE,
                   salt, SALT_SIZE,
                   INFO_KEY,   sizeof(INFO_KEY)   - 1,
                   file_key.data(), KEY_SIZE) != 0)   return -1;
 
-  if (hkdf_derive(master_key.data(), KEY_SIZE,
-                  salt, SALT_SIZE,
-                  INFO_NONCE, sizeof(INFO_NONCE) - 1,
-                  nonce_base.data(), NONCE_SIZE) != 0) return -1;
+  //if (hkdf_derive(master_key.data(), KEY_SIZE,
+  //                salt, SALT_SIZE,
+  //                INFO_NONCE, sizeof(INFO_NONCE) - 1,
+  //                nonce_base.data(), NONCE_SIZE) != 0) return -1;
 
   return 0;
 }

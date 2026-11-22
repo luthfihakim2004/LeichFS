@@ -141,7 +141,7 @@ struct FH {
 
   // Per-file cryptographic material. Derived once at open time
   util::secure_array<enc::KEY_SIZE>          file_key;
-  std::array<uint8_t, enc::NONCE_SIZE>       nonce_base{};
+  //std::array<uint8_t, enc::NONCE_SIZE>       nonce_base{};
   std::array<uint8_t, enc::AAD_PREFIX_LEN>   aad_prefix{};
   enc::UniqueEvpCipherCtx  enc_ctx;
   enc::UniqueEvpCipherCtx  dec_ctx; 

@@ -112,7 +112,7 @@ std::unique_ptr<::fs::FH> make_fh(int         fd_raw,
   // and the per-file salt (stored in the on-disk header).
   // The master key never leaves FSCtx after mount time.
   if (::enc::derive_file_material(::fs::ctx()->master_key.raw(), h.salt,
-                                fh->file_key.raw(), fh->nonce_base) != 0) {
+                                fh->file_key.raw()/*, fh->nonce_base*/) != 0) {
     out_err = -EIO;
     return nullptr;
   }
@@ -303,7 +303,7 @@ uint64_t be64toh_u64(uint64_t x) noexcept {
 }
 
 // AAD[40] layout:
-// magic[8] || be32(version)[4] || be32(chunk_sz)[4] || salt[32] || be64(chunk_idx)[8]
+// magic[8] || be32(version)[4] || be32(chunk_sz)[4] || salt[16] || be64(chunk_idx)[8]
 void build_aad(std::span<uint8_t, ::enc::AAD_PREFIX_LEN + 8> out, 
                const std::array<uint8_t,
                ::enc::AAD_PREFIX_LEN>& prefix, uint64_t chunk_idx) noexcept {

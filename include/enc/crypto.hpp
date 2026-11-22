@@ -22,8 +22,9 @@ namespace enc {
 int derive_file_material(
   const std::array<uint8_t, KEY_SIZE>& master_key,
   const uint8_t                        salt[SALT_SIZE],
-  std::array<uint8_t, KEY_SIZE>&       file_key,
-  std::array<uint8_t, NONCE_SIZE>&     nonce_base);
+  std::array<uint8_t, KEY_SIZE>&       file_key
+  //std::array<uint8_t, NONCE_SIZE>&     nonce_base
+  );
 
 
 // ── AES-256-GCM primitives ───────────────────────────────────────────────────

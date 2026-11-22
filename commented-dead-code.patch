@@ -1,0 +1,93 @@
+diff --git a/include/enc/crypto.hpp b/include/enc/crypto.hpp
+index 9171043..b502c42 100644
+--- a/include/enc/crypto.hpp
++++ b/include/enc/crypto.hpp
+@@ -22,8 +22,9 @@ namespace enc {
+ int derive_file_material(
+   const std::array<uint8_t, KEY_SIZE>& master_key,
+   const uint8_t                        salt[SALT_SIZE],
+-  std::array<uint8_t, KEY_SIZE>&       file_key,
+-  std::array<uint8_t, NONCE_SIZE>&     nonce_base);
++  std::array<uint8_t, KEY_SIZE>&       file_key
++  //std::array<uint8_t, NONCE_SIZE>&     nonce_base
++  );
+ 
+ 
+ // ── AES-256-GCM primitives ───────────────────────────────────────────────────
+diff --git a/include/fs/core.hpp b/include/fs/core.hpp
+index 402a446..089357c 100644
+--- a/include/fs/core.hpp
++++ b/include/fs/core.hpp
+@@ -141,7 +141,7 @@ struct FH {
+ 
+   // Per-file cryptographic material. Derived once at open time
+   util::secure_array<enc::KEY_SIZE>          file_key;
+-  std::array<uint8_t, enc::NONCE_SIZE>       nonce_base{};
++  //std::array<uint8_t, enc::NONCE_SIZE>       nonce_base{};
+   std::array<uint8_t, enc::AAD_PREFIX_LEN>   aad_prefix{};
+   enc::UniqueEvpCipherCtx  enc_ctx;
+   enc::UniqueEvpCipherCtx  dec_ctx; 
+diff --git a/lib/enc/crypto.cpp b/lib/enc/crypto.cpp
+index b411b70..290056d 100644
+--- a/lib/enc/crypto.cpp
++++ b/lib/enc/crypto.cpp
+@@ -49,21 +49,22 @@ int hkdf_derive(const uint8_t* key,   size_t key_len,
+ int derive_file_material(
+         const std::array<uint8_t, KEY_SIZE>& master_key,
+         const uint8_t                        salt[SALT_SIZE],
+-        std::array<uint8_t, KEY_SIZE>&       file_key,
+-        std::array<uint8_t, NONCE_SIZE>&     nonce_base) {
++        std::array<uint8_t, KEY_SIZE>&       file_key
++        //std::array<uint8_t, NONCE_SIZE>&     nonce_base
++        ) {
+ 
+   static constexpr char INFO_KEY  [] = "leichfs-file-key";
+-  static constexpr char INFO_NONCE[] = "leichfs-nonce-base";
++  //static constexpr char INFO_NONCE[] = "leichfs-nonce-base";
+ 
+   if (hkdf_derive(master_key.data(), KEY_SIZE,
+                   salt, SALT_SIZE,
+                   INFO_KEY,   sizeof(INFO_KEY)   - 1,
+                   file_key.data(), KEY_SIZE) != 0)   return -1;
+ 
+-  if (hkdf_derive(master_key.data(), KEY_SIZE,
+-                  salt, SALT_SIZE,
+-                  INFO_NONCE, sizeof(INFO_NONCE) - 1,
+-                  nonce_base.data(), NONCE_SIZE) != 0) return -1;
++  //if (hkdf_derive(master_key.data(), KEY_SIZE,
++  //                salt, SALT_SIZE,
++  //                INFO_NONCE, sizeof(INFO_NONCE) - 1,
++  //                nonce_base.data(), NONCE_SIZE) != 0) return -1;
+ 
+   return 0;
+ }
+diff --git a/lib/util.cpp b/lib/util.cpp
+index 8863825..2a50063 100644
+--- a/lib/util.cpp
++++ b/lib/util.cpp
+@@ -111,11 +111,11 @@ std::unique_ptr<::fs::FH> make_fh(int         fd_raw,
+   // Derive per-file key material from the master key (stored in FSCtx)
+   // and the per-file salt (stored in the on-disk header).
+   // The master key never leaves FSCtx after mount time.
+-  if (::enc::derive_file_material(::fs::ctx()->master_key.raw(), h.salt,
+-                                fh->file_key.raw(), fh->nonce_base) != 0) {
+-    out_err = -EIO;
+-    return nullptr;
+-  }
++  //if (::enc::derive_file_material(::fs::ctx()->master_key.raw(), h.salt,
++  //                              fh->file_key.raw(), fh->nonce_base) != 0) {
++  //  out_err = -EIO;
++  //  return nullptr;
++  //}
+   // master_key stays in FSCtx — never copied, never zeroed here.
+ 
+   // Initialize reusable EVP contexts — cipher and IV length set once here,
+@@ -303,7 +303,7 @@ uint64_t be64toh_u64(uint64_t x) noexcept {
+ }
+ 
+ // AAD[40] layout:
+-// magic[8] || be32(version)[4] || be32(chunk_sz)[4] || salt[32] || be64(chunk_idx)[8]
++// magic[8] || be32(version)[4] || be32(chunk_sz)[4] || salt[16] || be64(chunk_idx)[8]
+ void build_aad(std::span<uint8_t, ::enc::AAD_PREFIX_LEN + 8> out, 
+                const std::array<uint8_t,
+                ::enc::AAD_PREFIX_LEN>& prefix, uint64_t chunk_idx) noexcept {
