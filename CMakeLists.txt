@@ -75,6 +75,14 @@ target_link_options(leichfs PRIVATE
 
 # ── Cryptographic tests ──────────────────────────────────────────────────────
 if(BUILD_TESTING)
+    target_compile_options(crypto_tamper_test PRIVATE
+        $<$<CONFIG:Debug>:-O0 -g3 -fsanitize=address,undefined -fno-omit-frame-pointer>
+    )
+
+    target_link_options(crypto_tamper_test PRIVATE
+        $<$<CONFIG:Debug>:-fsanitize=address,undefined>
+    )
+    
     add_executable(crypto_tamper_test
         tests/crypto_tamper_test.cpp
         lib/enc/crypto.cpp
