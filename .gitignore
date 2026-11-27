@@ -1,4 +1,5 @@
 build/
+/cmake-build-*/
 compile_commands.json
 .cache/
 mnt/
@@ -11,4 +12,5 @@ Notes
 Unfinished-example-report.pdf
 test.patch
 __pycache__/
+*.pyc
 Documentation/personal/*
