@@ -77,15 +77,21 @@ int main(int argc, char* argv[]) {
   fuse_argv.push_back(argv[0]);
   fuse_argv.push_back(argv[2]);
 
-  for (int i = 3; i < argc; ++i) {
-    if (std::strncmp(argv[i], "--key=", 6) == 0)
+  int i = 3;
+  while (i < argc) {
+    if (std::strncmp(argv[i], "--key=", 6) == 0) {
       keyfile = argv[i] + 6;
-    else if (std::strcmp(argv[i], "--key") == 0 && i + 1 < argc)
-      keyfile = argv[++i];
-    else if (std::strncmp(argv[i], "--key-fd=", 9) == 0)
+      ++i;
+    } else if (std::strcmp(argv[i], "--key") == 0 && i + 1 < argc) {
+      keyfile = argv[i + 1];
+      i += 2;
+    } else if (std::strncmp(argv[i], "--key-fd=", 9) == 0) {
       key_fd = std::atoi(argv[i] + 9);
-    else
+      ++i;
+    } else {
       fuse_argv.push_back(argv[i]);
+      ++i;
+    }
   }
 
   util::unique_fd rootfd = util::validate_root_path(backing.c_str());
