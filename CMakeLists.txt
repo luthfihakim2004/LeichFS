@@ -75,21 +75,19 @@ target_link_options(leichfs PRIVATE
 
 # ── Cryptographic tests ──────────────────────────────────────────────────────
 if(BUILD_TESTING)
-    target_compile_options(crypto_tamper_test PRIVATE
-        $<$<CONFIG:Debug>:-O0 -g3 -fsanitize=address,undefined -fno-omit-frame-pointer>
-    )
 
-    target_link_options(crypto_tamper_test PRIVATE
-        $<$<CONFIG:Debug>:-fsanitize=address,undefined>
-    )
-    
     add_executable(crypto_tamper_test
         tests/crypto_tamper_test.cpp
         lib/enc/crypto.cpp
     )
 
-    target_include_directories(crypto_tamper_test PRIVATE ${LEICHFS_INCLUDE})
-    target_link_libraries(crypto_tamper_test PRIVATE PkgConfig::OPENSSL)
+    target_include_directories(crypto_tamper_test PRIVATE
+        ${LEICHFS_INCLUDE}
+    )
+
+    target_link_libraries(crypto_tamper_test PRIVATE
+        PkgConfig::OPENSSL
+    )
 
     target_compile_options(crypto_tamper_test PRIVATE
         -Wall
@@ -97,9 +95,18 @@ if(BUILD_TESTING)
         -Wpedantic
         -Wconversion
         -Wshadow
+        $<$<CONFIG:Debug>:-O0 -g3 -fsanitize=address,undefined -fno-omit-frame-pointer>
     )
 
-    add_test(NAME crypto_tamper_detection COMMAND crypto_tamper_test)
+    target_link_options(crypto_tamper_test PRIVATE
+        $<$<CONFIG:Debug>:-fsanitize=address,undefined>
+    )
+
+    add_test(
+        NAME crypto_tamper_detection
+        COMMAND crypto_tamper_test
+    )
+
 endif()
 
 # ── Install ───────────────────────────────────────────────────────────────────
